@@ -145,16 +145,15 @@ fn open_url(url: String) {
     }
 }
 
-/// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
-/// and falls back to the system file manager otherwise.
+/// "Open terminal" opens the working folder in VS Code (or VSCodium) when one
+/// is installed, and falls back to a terminal, then the file manager.
 #[tauri::command]
 fn open_in_vscode(path: Option<String>) -> bool {
     // No shell anywhere near this. The path is a project folder chosen by whoever
     // is using Claude Code, and a shell would happily read metacharacters in a
     // folder name as syntax. Finding the launcher ourselves and handing the path
     // over as a separate argument keeps it a path.
-    if let Some(code) = find_on_path("code") {
-        let mut cmd = external(code);
+    if let Some(mut cmd) = editor_command() {
         if let Some(p) = path.as_deref().filter(|p| !p.is_empty()) {
             cmd.arg(p);
         }
@@ -175,6 +174,38 @@ fn open_in_vscode(path: Option<String>) -> bool {
         }
     }
     false
+}
+
+#[cfg(windows)]
+fn editor_command() -> Option<Command> {
+    find_on_path("code").map(external)
+}
+
+/// VS Code and its open builds, whichever is installed: on $PATH first, then as
+/// a Flatpak (VSCodium is often installed that way and puts nothing on $PATH).
+#[cfg(unix)]
+fn editor_command() -> Option<Command> {
+    for name in ["code", "codium", "code-oss"] {
+        if let Some(bin) = find_on_path(name) {
+            return Some(external(bin));
+        }
+    }
+    let flatpak = find_on_path("flatpak")?;
+    for id in ["com.visualstudio.code", "com.vscodium.codium"] {
+        let installed = external(&flatpak)
+            .args(["info", id])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if installed {
+            let mut cmd = external(&flatpak);
+            cmd.args(["run", id]);
+            return Some(cmd);
+        }
+    }
+    None
 }
 
 /// Opens a terminal emulator in `dir`: $TERMINAL first, then the usual ones.

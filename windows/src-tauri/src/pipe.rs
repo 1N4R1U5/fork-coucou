@@ -1,7 +1,7 @@
 // Relay server for coucou-hook.
 //
 // Windows: a named pipe `\\.\pipe\coucou-<sid>`, one instance per connection.
-// Linux:   a Unix socket `$XDG_RUNTIME_DIR/coucou-<uid>.sock`, mode 0600.
+// Linux:   a Unix socket `$XDG_RUNTIME_DIR/coucou/coucou-<uid>.sock`, mode 0600.
 //
 // Either way, every hook event is forwarded to the island as a `hook` event.
 // `PermissionRequest` is the only one that keeps its connection open: it waits
@@ -102,7 +102,12 @@ pub fn start(app: AppHandle) {
     });
 }
 
-/// `$XDG_RUNTIME_DIR/coucou-<uid>.sock` — must match coucou-hook's `pipe_path()`.
+/// `$XDG_RUNTIME_DIR/coucou/coucou-<uid>.sock` — must match coucou-hook's
+/// `pipe_path()`. The socket gets a directory of its own so a sandboxed editor
+/// (Flatpak VSCodium running Claude Code) can be given exactly this, with
+/// `--filesystem=xdg-run/coucou`, rather than the whole runtime directory.
+/// Exposing the socket file itself would not survive a restart: it is
+/// recreated on every launch, and the sandbox keeps the old one.
 #[cfg(unix)]
 pub fn socket_path() -> std::path::PathBuf {
     let key = crate::win_user::current_user_sid().unwrap_or_else(|| "user".into());
@@ -110,7 +115,7 @@ pub fn socket_path() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(std::env::temp_dir);
-    base.join(format!("coucou-{key}.sock"))
+    base.join("coucou").join(format!("coucou-{key}.sock"))
 }
 
 #[cfg(unix)]
@@ -119,6 +124,11 @@ pub fn start(app: AppHandle) {
     use tokio::net::UnixListener;
     tauri::async_runtime::spawn(async move {
         let path = socket_path();
+        if let Some(dir) = path.parent() {
+            use std::os::unix::fs::DirBuilderExt;
+            let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
         // A socket left over from a previous run would refuse the bind.
         let _ = std::fs::remove_file(&path);
         let listener = match UnixListener::bind(&path) {

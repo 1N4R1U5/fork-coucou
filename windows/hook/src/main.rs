@@ -50,7 +50,7 @@ fn pipe_path() -> String {
     format!(r"\\.\pipe\coucou-{key}")
 }
 
-/// `$XDG_RUNTIME_DIR/coucou-<uid>.sock` — must match the app's `socket_path()`.
+/// `$XDG_RUNTIME_DIR/coucou/coucou-<uid>.sock` — must match the app's `socket_path()`.
 #[cfg(unix)]
 fn pipe_path() -> String {
     let key = win::current_user_sid().unwrap_or_else(|| "user".into());
@@ -58,7 +58,10 @@ fn pipe_path() -> String {
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(std::env::temp_dir);
-    base.join(format!("coucou-{key}.sock")).to_string_lossy().into_owned()
+    base.join("coucou")
+        .join(format!("coucou-{key}.sock"))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Opens the pipe. Retries only while the server is busy: any other error means
