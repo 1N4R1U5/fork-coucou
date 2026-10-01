@@ -21,7 +21,8 @@ export type IslandViewName =
   | "result"
   | "note"
   | "settings"
-  | "greeting";
+  | "greeting"
+  | "session";
 
 export type BotStateName =
   | "idle"
@@ -86,6 +87,9 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   note: { height: 160, botX: 60, botY: null, botDiameter: 50, agentMode: "column" },
   settings: { height: 160, botX: 54, botY: null, botDiameter: 46, agentMode: "none" },
   greeting: { height: 150, botX: 320, botY: 90, botDiameter: 0, agentMode: "none" },
+  // Claude Code session in detail: Mochi top-left above the step list, the
+  // file being worked on to the right (docs/media/claude-code.png).
+  session: { height: 300, botX: 74, botY: 88, botDiameter: 58, agentMode: "none" },
 };
 
 // The upload views above are only the fallback geometry. Once a file is actually

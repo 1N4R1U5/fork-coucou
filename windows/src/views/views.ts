@@ -11,6 +11,7 @@ import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
+import { buildSession } from "./session";
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -103,7 +104,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
     el,
     sync() {
       const v = State.view;
-      tabHome.classList.toggle("on", v === "overview" || v === "empty");
+      tabHome.classList.toggle("on", v === "overview" || v === "empty" || v === "session");
       tabChat.classList.toggle("on", v === "prompt");
       tabDrop.classList.toggle("on", v === "upload");
       gearBtn.classList.toggle("on", v === "settings");
@@ -121,7 +122,13 @@ export function buildHeader(actions: ViewActions): ViewHost {
 function buildOverview(actions: ViewActions): ViewHost {
   const ticker = new Ticker();
   const who = h("div", { class: "who" });
-  const tickerBody = h("div", { class: "card-body" }, who, ticker.el);
+  // The running session opens in detail: steps and the file being worked on.
+  const tickerBody = h(
+    "div",
+    { class: "card-body clickable", title: "Voir la session", onclick: () => actions.setView("session") },
+    who,
+    ticker.el,
+  );
   const leftBody = h("div", { class: "left-body" });
   const jump = h(
     "button",
@@ -502,6 +509,7 @@ export function buildViews(
 ): Map<IslandViewName, ViewHost> {
   const map = new Map<IslandViewName, ViewHost>();
   map.set("overview", buildOverview(actions));
+  map.set("session", buildSession(actions));
   map.set("empty", buildEmpty(actions));
   map.set("approval", buildApproval(actions));
   map.set("question", buildQuestion());

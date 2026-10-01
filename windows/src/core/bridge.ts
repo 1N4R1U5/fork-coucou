@@ -56,6 +56,15 @@ export const Bridge = {
 
   /** "Open terminal" → opens the folder in VS Code when `code` is on PATH. */
   openInVSCode: (path: string | null) => call<boolean>("open_in_vscode", { path }),
+  /** A few lines of a local file, for the session view's editor panel. */
+  readSnippet: (
+    path: string,
+    opts: { needle?: string; context?: number; offset?: number; limit?: number },
+  ) =>
+    call<{ start: number; lines: string[]; matchLine: number | null; totalLines: number }>(
+      "read_snippet",
+      { path, ...opts },
+    ),
   /** Brings back the window (and Konsole tab) the session runs in. */
   focusTerminal: (terminal: TerminalRef | null, path: string | null) =>
     call<boolean>("focus_terminal", { terminal, path }),

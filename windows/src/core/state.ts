@@ -32,6 +32,33 @@ export interface TerminalRef {
   ancestorPids?: number[];
 }
 
+/** One tool call in the session view's step list. */
+export interface Activity {
+  tool: string;
+  status: "running" | "done" | "failed";
+}
+
+/** One line of the session view's editor panel. `n` is the file's line number. */
+export interface CodeLine {
+  n: number | null;
+  kind: "ctx" | "del" | "add" | "cmd" | "note";
+  text: string;
+}
+
+/** What the editor panel shows: the file (or command) of the latest tool call. */
+export interface SessionDetail {
+  tool: string;
+  /** Tab title: the file name, or "Terminal" / the tool for non-file tools. */
+  title: string;
+  /** Path shown on the right of the tab, relative to the session folder. */
+  subtitle: string;
+  /** File extension, lower case, for the badge and the highlighter. */
+  ext: string;
+  /** Orange dot: the edit is in flight. */
+  dirty: boolean;
+  lines: CodeLine[];
+}
+
 export interface ApprovalInfo {
   requestId: string;
   sessionId: string;
@@ -124,6 +151,10 @@ type Listener = () => void;
 class AppState {
   mode: IslandMode = "hidden";
   view: IslandViewName = "overview";
+
+  /** The Claude Code session view: recent tool calls and the latest detail. */
+  activities: Activity[] = [];
+  sessionDetail: SessionDetail | null = null;
 
   tasks: AgentTask[] = [];
   focusId: string | null = null;

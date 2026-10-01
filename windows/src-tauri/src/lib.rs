@@ -9,6 +9,7 @@ mod log;
 mod pipe;
 mod secrets;
 mod settings;
+mod snippet;
 mod systime;
 mod tray;
 mod win_user;
@@ -617,6 +618,24 @@ async fn refresh_integration(app: AppHandle, id: String) {
     integrations::poll_once(app, &id).await;
 }
 
+/// A few lines of a file Claude Code is reading or editing, for the session view.
+#[tauri::command]
+fn read_snippet(
+    path: String,
+    needle: Option<String>,
+    context: Option<usize>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Option<snippet::Snippet> {
+    snippet::read(
+        &path,
+        needle.as_deref(),
+        context.unwrap_or(2),
+        offset.unwrap_or(1),
+        limit.unwrap_or(12),
+    )
+}
+
 /// Lets the island write to the same log as the Rust side.
 #[tauri::command]
 fn log_line(message: String) {
@@ -728,6 +747,7 @@ pub fn run() {
             reposition,
             open_url,
             focus_terminal,
+            read_snippet,
             open_in_vscode,
             quit_app,
             hooks_status,

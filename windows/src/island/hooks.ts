@@ -7,6 +7,14 @@ import { Bridge, onEvent } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
 import type { Island } from "./island";
+import {
+  clearSessionView,
+  finishActivity,
+  finishTurn,
+  resetActivities,
+  showToolCall,
+  startActivity,
+} from "./session";
 
 const CLAUDE_ID = "integration_claude";
 
@@ -179,6 +187,7 @@ function handleHook(island: Island, payload: HookPayload) {
 
     case "UserPromptSubmit": {
       upsert(projectName, cwd);
+      resetActivities();
       State.updateTask(CLAUDE_ID, "thinking");
       // The field is `prompt`; reading `message` meant this step was always blank.
       const asked = payload.prompt ?? payload.message;
@@ -192,16 +201,20 @@ function handleHook(island: Island, payload: HookPayload) {
       State.updateTask(CLAUDE_ID, "working");
       const tool = payload.tool_name ?? "Tool";
       State.appendStep(CLAUDE_ID, stepLabel(tool, payload.tool_input ?? {}));
+      startActivity(tool);
+      showToolCall(tool, payload.tool_input ?? {}, cwd);
       surface("overview", false);
       break;
     }
 
     case "PostToolUse":
       State.updateTask(CLAUDE_ID, "working");
+      finishActivity(payload.tool_name ?? "", true);
       break;
 
     case "PostToolUseFailure":
       State.updateTask(CLAUDE_ID, "working");
+      finishActivity(payload.tool_name ?? "", false);
       State.appendStep(CLAUDE_ID, "⚠ failed");
       break;
 
@@ -220,6 +233,7 @@ function handleHook(island: Island, payload: HookPayload) {
 
     case "Stop":
       State.updateTask(CLAUDE_ID, "finished");
+      finishTurn();
       if (payload.message) State.appendStep(CLAUDE_ID, payload.message.slice(0, 60));
       Sound.play("finish");
       if (focused) surface("finished", true);
@@ -240,6 +254,8 @@ function handleHook(island: Island, payload: HookPayload) {
     case "SessionEnd":
       State.updateTask(CLAUDE_ID, "idle");
       clearSession();
+      clearSessionView();
+      if (State.view === "session") island.setView(State.defaultView());
       break;
 
     case "SubagentStart":

@@ -1367,3 +1367,255 @@ body.asleep *::before,
 body.asleep *::after {
   animation-play-state: paused !important;
 }
+
+/* ── Session in detail (docs/media/claude-code.png) ──────────────────────── */
+
+.card-body.clickable {
+  cursor: pointer;
+}
+
+.session .card {
+  background: var(--card);
+}
+
+/* Mochi is drawn by the island at (74, 88): the column starts under it. */
+.sess-left {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 156px;
+  padding: 84px 0 0 22px;
+}
+
+.sess-name {
+  font: 600 15px var(--font);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 8px;
+}
+
+.sess-tool {
+  font: 400 12px var(--font);
+  color: var(--dim-2);
+  margin-top: 1px;
+}
+
+.sess-steps {
+  list-style: none;
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sess-step {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font: 500 13px var(--font);
+  color: #c5c8cd;
+}
+
+.sess-step.running {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.sess-step.end {
+  color: var(--dim-3);
+}
+
+.sess-step > i {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+
+.st-done {
+  background: var(--green);
+  color: #0b1a10;
+}
+
+.sess-step.end .st-done {
+  background: var(--dim-5);
+  color: var(--card);
+}
+
+.st-fail {
+  background: var(--red);
+  color: #fff;
+}
+
+.st-term {
+  border-radius: 3px !important;
+  border: 1.2px solid var(--dim-3);
+  color: var(--dim-2);
+  font: 700 7px var(--mono);
+  font-style: normal;
+}
+
+.st-spin {
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--ink);
+  animation: st-spin 0.8s linear infinite;
+}
+
+@keyframes st-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sess-editor {
+  position: absolute;
+  left: 160px;
+  top: 10px;
+  right: 10px;
+  bottom: 10px;
+  border-radius: 12px;
+  background: #0b0c0f;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ed-bar {
+  flex: 0 0 30px;
+  display: flex;
+  align-items: stretch;
+  background: #121317;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  padding-right: 8px;
+  min-width: 0;
+}
+
+.ed-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  background: #0b0c0f;
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+  font: 500 12px var(--mono);
+  color: var(--ink);
+  min-width: 0;
+  max-width: 60%;
+}
+
+.ed-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ed-badge {
+  font: 700 8px var(--font);
+  padding: 2px 3px;
+  border-radius: 3px;
+  letter-spacing: 0.2px;
+  flex: 0 0 auto;
+}
+
+.ed-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  flex: 0 0 6px;
+}
+
+.ed-path {
+  margin-left: auto;
+  align-self: center;
+  padding-left: 10px;
+  font: 400 11px var(--mono);
+  color: var(--dim-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ed-jump {
+  align-self: center;
+  margin-left: 8px;
+  flex: 0 0 auto;
+}
+
+.ed-code {
+  flex: 1 1 auto;
+  padding: 8px 0;
+  overflow: hidden;
+  font: 400 12px/20px var(--mono);
+}
+
+.ln {
+  display: flex;
+  height: 20px;
+  white-space: pre;
+  color: #d4d7dd;
+}
+
+.ln-num {
+  flex: 0 0 40px;
+  text-align: right;
+  padding-right: 12px;
+  color: var(--dim-4);
+}
+
+.ln-sign {
+  flex: 0 0 16px;
+}
+
+.ln-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 10px;
+}
+
+.ln.del {
+  background: rgba(244, 80, 94, 0.13);
+  box-shadow: inset 2px 0 0 var(--red);
+}
+
+.ln.del .ln-num,
+.ln.del .ln-sign {
+  color: var(--red-text);
+}
+
+.ln.del .ln-txt {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 141, 151, 0.55);
+  opacity: 0.75;
+}
+
+.ln.add {
+  background: rgba(34, 197, 94, 0.12);
+  box-shadow: inset 2px 0 0 var(--green);
+}
+
+.ln.add .ln-num,
+.ln.add .ln-sign {
+  color: var(--green-2);
+}
+
+.ln.cmd {
+  color: #9ee493;
+}
+
+.ln.note {
+  color: var(--dim-3);
+}
+
+.tk-k { color: #c792ea; }
+.tk-s { color: #c3e88d; }
+.tk-n { color: #f78c6c; }
+.tk-t { color: #ffcb6b; }
+.tk-f { color: #82aaff; }
+.tk-c { color: var(--dim-4); font-style: italic; }
