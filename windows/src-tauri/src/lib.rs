@@ -290,6 +290,181 @@ fn external(program: impl AsRef<std::ffi::OsStr>) -> Command {
     Command::new(program)
 }
 
+/// What coucou-hook saw of the terminal around a Claude Code session.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(windows, allow(dead_code))]
+struct TerminalRef {
+    konsole_service: Option<String>,
+    konsole_window: Option<String>,
+    konsole_session: Option<String>,
+    flatpak_id: Option<String>,
+    ancestor_pids: Option<Vec<u32>>,
+}
+
+/// The ↗ button on a Claude Code session: bring back the window it runs in —
+/// on KDE the exact Konsole tab — and only open something new when that
+/// window cannot be found.
+#[tauri::command]
+fn focus_terminal(terminal: Option<TerminalRef>, path: Option<String>) -> bool {
+    #[cfg(unix)]
+    {
+        let terminal = terminal.unwrap_or_default();
+        // D-Bus calls and the KWin script take a moment; never on the UI thread.
+        std::thread::spawn(move || {
+            let found = focus_terminal_linux(&terminal, path.as_deref());
+            crate::log::line(format!(
+                "focus terminal: konsole={} flatpak={} pids={} → {}",
+                terminal.konsole_session.as_deref().unwrap_or("-"),
+                terminal.flatpak_id.as_deref().unwrap_or("-"),
+                terminal.ancestor_pids.as_ref().map_or(0, Vec::len),
+                if found { "raised" } else { "fallback" },
+            ));
+            if !found {
+                open_in_vscode(path);
+            }
+        });
+        true
+    }
+    #[cfg(windows)]
+    {
+        let _ = terminal;
+        open_in_vscode(path)
+    }
+}
+
+#[cfg(unix)]
+fn focus_terminal_linux(t: &TerminalRef, path: Option<&str>) -> bool {
+    // Inside a Flatpak (VSCodium…) the pids are the sandbox's own and mean
+    // nothing out here; asking the app to open the folder raises its window.
+    if let Some(id) = t.flatpak_id.as_deref().filter(|id| is_app_id(id)) {
+        if let Some(flatpak) = find_on_path("flatpak") {
+            let mut cmd = external(flatpak);
+            cmd.args(["run", id]);
+            if let Some(p) = path.filter(|p| !p.is_empty()) {
+                cmd.arg(p);
+            }
+            return cmd.spawn().is_ok();
+        }
+    }
+
+    let mut pids: Vec<u32> = Vec::new();
+    if let (Some(service), Some(window), Some(session)) = (
+        t.konsole_service.as_deref(),
+        t.konsole_window.as_deref(),
+        t.konsole_session.as_deref(),
+    ) {
+        let valid = (service.starts_with(':') || service.starts_with("org.kde.konsole"))
+            && service.chars().all(|c| c.is_ascii_alphanumeric() || ".:-_".contains(c))
+            && window.starts_with("/Windows/")
+            && window[9..].chars().all(|c| c.is_ascii_digit());
+        let session_id = session
+            .strip_prefix("/Sessions/")
+            .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+        if let (true, Some(n)) = (valid, session_id) {
+            let _ = gdbus(&[
+                "--dest", service, "--object-path", window,
+                "--method", "org.kde.konsole.Window.setCurrentSession", n,
+            ]);
+            if let Some(out) = gdbus(&[
+                "--dest", "org.freedesktop.DBus", "--object-path", "/org/freedesktop/DBus",
+                "--method", "org.freedesktop.DBus.GetConnectionUnixProcessID", service,
+            ]) {
+                // "(uint32 4822,)"
+                if let Some(pid) = out
+                    .split(|c: char| !c.is_ascii_digit())
+                    .filter(|s| !s.is_empty())
+                    .last()
+                    .and_then(|s| s.parse().ok())
+                {
+                    pids.push(pid);
+                }
+            }
+        }
+    }
+    if pids.is_empty() {
+        pids = t.ancestor_pids.clone().unwrap_or_default();
+    }
+    pids.retain(|p| *p > 1);
+    !pids.is_empty() && kwin_activate(&pids)
+}
+
+#[cfg(unix)]
+fn is_app_id(id: &str) -> bool {
+    id.contains('.') && id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+}
+
+#[cfg(unix)]
+fn gdbus(args: &[&str]) -> Option<String> {
+    let out = external("gdbus")
+        .args(["call", "--session"])
+        .args(args)
+        .output()
+        .ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Asks KWin to activate the first normal window owned by one of `pids`.
+/// Wayland gives clients no way to raise another app's window; the compositor
+/// can, through a one-off script. Other desktops simply say no and we fall back.
+#[cfg(unix)]
+fn kwin_activate(pids: &[u32]) -> bool {
+    const NAME: &str = "coucou-raise";
+    let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    let script = format!(
+        "const pids = [{list}];\n\
+         const all = workspace.windowList ? workspace.windowList() : workspace.clientList();\n\
+         let hit = null;\n\
+         for (const pid of pids) {{\n\
+           for (const w of all) {{\n\
+             if (w.pid === pid && w.normalWindow) {{ hit = w; break; }}\n\
+           }}\n\
+           if (hit) break;\n\
+         }}\n\
+         if (hit) {{\n\
+           hit.minimized = false;\n\
+           if ('activeWindow' in workspace) workspace.activeWindow = hit;\n\
+           else workspace.activeClient = hit;\n\
+         }}\n"
+    );
+    let path = pipe::socket_path().with_file_name("raise.js");
+    if std::fs::write(&path, script).is_err() {
+        return false;
+    }
+    let path_str = path.to_string_lossy().into_owned();
+    let _ = gdbus(&[
+        "--dest", "org.kde.KWin", "--object-path", "/Scripting",
+        "--method", "org.kde.kwin.Scripting.unloadScript", NAME,
+    ]);
+    let Some(out) = gdbus(&[
+        "--dest", "org.kde.KWin", "--object-path", "/Scripting",
+        "--method", "org.kde.kwin.Scripting.loadScript", &path_str, NAME,
+    ]) else {
+        return false;
+    };
+    // "(0,)" — a negative id means KWin refused the script.
+    let Some(id) = out
+        .trim_matches(|c: char| c == '(' || c == ')' || c == ',' || c.is_whitespace())
+        .parse::<i64>()
+        .ok()
+        .filter(|id| *id >= 0)
+    else {
+        return false;
+    };
+    let ran = gdbus(&[
+        "--dest", "org.kde.KWin", "--object-path", &format!("/Scripting/Script{id}"),
+        "--method", "org.kde.kwin.Script.run",
+    ])
+    .is_some();
+    // Give the script its turn before taking it away again.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let _ = gdbus(&[
+        "--dest", "org.kde.KWin", "--object-path", "/Scripting",
+        "--method", "org.kde.kwin.Scripting.unloadScript", NAME,
+    ]);
+    ran
+}
+
 /// Our own `where`: walks %PATH% against %PATHEXT%, no shell involved.
 /// Rust quotes arguments correctly for `.cmd`/`.bat` targets since 1.77, so
 /// spawning `code.cmd` directly is safe.
@@ -552,6 +727,7 @@ pub fn run() {
             focus_window,
             reposition,
             open_url,
+            focus_terminal,
             open_in_vscode,
             quit_app,
             hooks_status,

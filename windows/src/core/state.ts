@@ -19,6 +19,17 @@ export interface AgentTask {
   miniEye?: EyeShape | null;
   pillBadge?: PillBadge | null;
   sessionCwd?: string | null;
+  /** Where the Claude Code session runs, so ↗ can bring that window back. */
+  terminal?: TerminalRef | null;
+}
+
+/** What coucou-hook saw of the terminal around the session (Linux). */
+export interface TerminalRef {
+  konsoleService?: string;
+  konsoleWindow?: string;
+  konsoleSession?: string;
+  flatpakId?: string;
+  ancestorPids?: number[];
 }
 
 export interface ApprovalInfo {

@@ -8,6 +8,15 @@ import { Island } from "./island/island";
 import { registerHookHandlers } from "./island/hooks";
 import { registerIntegrationHandlers, refreshConfigured } from "./island/integrations";
 
+// An exception in the island leaves it frozen on screen with nothing to show
+// for it; put it in coucou.log where a bug report can find it.
+window.addEventListener("error", (e) => {
+  void Bridge.log(`js error: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  void Bridge.log(`js rejection: ${String(e.reason)}`);
+});
+
 async function main() {
   const root = document.getElementById("root");
   if (!root) return;

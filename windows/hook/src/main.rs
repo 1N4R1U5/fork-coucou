@@ -203,6 +203,11 @@ fn read_event() -> Option<(String, String)> {
         ("term_session_id", "TERM_SESSION_ID"),
         ("vscode_pid", "VSCODE_PID"),
         ("session_pid", "CLAUDE_CODE_SSE_PORT"),
+        // Linux: enough to bring the right terminal back from the island.
+        ("konsole_service", "KONSOLE_DBUS_SERVICE"),
+        ("konsole_window", "KONSOLE_DBUS_WINDOW"),
+        ("konsole_session", "KONSOLE_DBUS_SESSION"),
+        ("flatpak_id", "FLATPAK_ID"),
     ] {
         if !map.contains_key(key) {
             let value = std::env::var(var).unwrap_or_default();
@@ -210,11 +215,34 @@ fn read_event() -> Option<(String, String)> {
         }
     }
 
+    #[cfg(unix)]
+    if !map.contains_key("ancestor_pids") {
+        map.insert("ancestor_pids".into(), serde_json::json!(ancestor_pids()));
+    }
+
     truncate_strings(&mut payload);
 
     let mut line = payload.to_string();
     line.push('\n');
     Some((line, event))
+}
+
+/// Our parent, its parent, and so on: one of them owns the terminal window the
+/// session runs in, which is how the island finds that window again.
+#[cfg(unix)]
+fn ancestor_pids() -> Vec<u32> {
+    let mut pids = Vec::new();
+    let mut pid = std::os::unix::process::parent_id();
+    while pid > 1 && pids.len() < 24 {
+        pids.push(pid);
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { break };
+        // The command name is in parentheses and may contain spaces: the parent
+        // pid is the second field after the last ')'.
+        let Some(rest) = stat.rsplit_once(')').map(|(_, r)| r) else { break };
+        let Some(ppid) = rest.split_whitespace().nth(1).and_then(|p| p.parse().ok()) else { break };
+        pid = ppid;
+    }
+    pids
 }
 
 /// Caps every string in the payload. A single Write can carry a whole file.

@@ -23,6 +23,11 @@ interface HookPayload {
   prompt?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  konsole_service?: string;
+  konsole_window?: string;
+  konsole_session?: string;
+  flatpak_id?: string;
+  ancestor_pids?: number[];
 }
 
 const PROJECT_ALIASES: Record<string, string> = {
@@ -108,6 +113,23 @@ function upsert(projectName: string, cwd: string) {
   if (cwd) t.sessionCwd = cwd;
 }
 
+/** Remembers the terminal of the session that spoke last. */
+function rememberTerminal(payload: HookPayload) {
+  const t = State.tasks.find((x) => x.id === CLAUDE_ID);
+  if (!t) return;
+  const pids = Array.isArray(payload.ancestor_pids)
+    ? payload.ancestor_pids.filter((p) => Number.isInteger(p) && p > 1)
+    : [];
+  const ref = {
+    konsoleService: payload.konsole_service || undefined,
+    konsoleWindow: payload.konsole_window || undefined,
+    konsoleSession: payload.konsole_session || undefined,
+    flatpakId: payload.flatpak_id || undefined,
+    ancestorPids: pids.length ? pids : undefined,
+  };
+  if (Object.values(ref).some((v) => v !== undefined)) t.terminal = ref;
+}
+
 function clearSession() {
   const t = State.tasks.find((x) => x.id === CLAUDE_ID);
   if (!t) return;
@@ -132,6 +154,7 @@ function handleHook(island: Island, payload: HookPayload) {
 
   const name = payload.hook_event_name ?? "";
   const cwd = payload.cwd ?? "";
+  if (name !== "SessionEnd") rememberTerminal(payload);
   const raw = lastPathComponent(cwd);
   const projectName = aliasProjectName(raw || "Session");
   const focused = State.focusId === CLAUDE_ID;

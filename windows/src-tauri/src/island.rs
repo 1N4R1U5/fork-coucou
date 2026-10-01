@@ -475,13 +475,13 @@ pub fn apply_click_through(app: &AppHandle, gate: &PollGate) {
         use gtk::prelude::*;
 
         let Ok(gtk_win) = win.gtk_window() else { return };
-        if collapsed {
-            // The wake strip must take the mouse everywhere.
-            gtk_win.input_shape_combine_region(None);
-            return;
-        }
         let Some(gdk_win) = gtk_win.window() else { return };
-        let rect = if r.w > 0.0 {
+        let rect = if collapsed {
+            // Only the strip itself. GTK will not shrink the window below its
+            // minimum height (about 200 px), and the rest of that invisible
+            // window would otherwise swallow every click at the top of the screen.
+            RectangleInt::new(0, 0, STRIP_W.ceil() as i32, STRIP_H.ceil() as i32)
+        } else if r.w > 0.0 {
             let x = (r.x - HIT_MARGIN).floor().max(0.0) as i32;
             let y = (r.y - HIT_MARGIN).floor().max(0.0) as i32;
             let right = (r.x + r.w + HIT_MARGIN).ceil() as i32;

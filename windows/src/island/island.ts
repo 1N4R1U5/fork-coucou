@@ -112,8 +112,8 @@ export class Island {
         Sound.play("blip");
       },
       openTerminal: () => {
-        const cwd = State.focusTask?.sessionCwd ?? null;
-        void Bridge.openInVSCode(cwd);
+        const task = State.focusTask;
+        void Bridge.focusTerminal(task?.terminal ?? null, task?.sessionCwd ?? null);
       },
       // The ↗ button — same targets as openAgentTarget() on macOS.
       openTarget: () => {
@@ -127,7 +127,9 @@ export class Island {
           integration_notion: "https://notion.so",
           integration_calcom: "https://app.cal.com/bookings",
         };
-        if (task.id === "integration_claude") void Bridge.openInVSCode(task.sessionCwd ?? null);
+        if (task.id === "integration_claude") {
+          void Bridge.focusTerminal(task.terminal ?? null, task.sessionCwd ?? null);
+        }
         else if (task.id === "integration_n8n") void Bridge.openN8n();
         else if (urls[task.id]) void Bridge.openUrl(urls[task.id]);
       },
@@ -731,7 +733,8 @@ export class Island {
     this.viewsEl.classList.toggle("hidden-by-upload", uploadActive);
 
     tickMiniBots(dt);
-    this.views.get(State.view)?.tick?.(nowMs);
+    const view = this.views.get(State.view);
+    view?.tick?.(nowMs);
     if (UploadSeq.isActive) this.stepSequence();
     this.updateCountdown(nowMs);
 
@@ -747,7 +750,10 @@ export class Island {
       ? settling
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
-        greetingActive || this.engine.busy || UploadSeq.isActive;
+        greetingActive || this.engine.busy || UploadSeq.isActive ||
+        // A step scrolling in the ticker must finish, or it freezes half-way
+        // with two lines drawn over each other.
+        (view?.busy?.() ?? false);
 
     if (busy) {
       requestAnimationFrame(this.frame);
