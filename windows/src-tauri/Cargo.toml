@@ -1,6 +1,6 @@
 [package]
 name = "coucou"
-description = "Coucou for Windows — Mochi lives at the top of your screen"
+description = "Coucou — Mochi lives at the top of your screen"
 authors = ["Louis Raille"]
 version.workspace = true
 edition.workspace = true
@@ -21,6 +21,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# The system keychain: Credential Manager on Windows, the Secret Service
+# (GNOME Keyring / KWallet) on Linux. crypto-rust keeps it pure Rust — no libssl.
+[target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 windows = { version = "0.61", features = [
   "Win32_Foundation",
@@ -32,3 +36,11 @@ windows = { version = "0.61", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(unix)'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+libc = "0.2"
+# Reads the global pointer position and buttons for the island's peek / click-through.
+x11rb = "0.13"
+# Restricts the island window's input region to the island shape (click-through).
+gtk = "0.18"

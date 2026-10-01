@@ -309,10 +309,20 @@ function buildApproval(actions: ViewActions): ViewHost {
       if (rowKey === "built") return;
       rowKey = "built";
       clear(row);
-      row.append(
-        btn("Deny", "secondary", () => actions.decide("deny"), "N"),
-        btn("Allow", "primary", () => actions.decide("allow"), "Y"),
-      );
+      // A permission is only ever answered by a real pointer click. These
+      // buttons outlive each card, so the one clicked last keeps keyboard focus,
+      // and an Enter or Space meant for another window (the island can hold
+      // focus on Linux) would otherwise answer the next request on its own.
+      const decideOnClick = (d: "allow" | "deny") => (e: MouseEvent) => {
+        (e.currentTarget as HTMLElement).blur();
+        if (e.detail === 0) return; // keyboard-synthesised click
+        actions.decide(d);
+      };
+      const deny = btn("Deny", "secondary", () => {}, "N");
+      const allow = btn("Allow", "primary", () => {}, "Y");
+      deny.onclick = decideOnClick("deny");
+      allow.onclick = decideOnClick("allow");
+      row.append(deny, allow);
     },
   };
 }

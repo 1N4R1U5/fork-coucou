@@ -5,13 +5,26 @@
 // coucou-hook computes the same string (hook/src/win.rs) and additionally checks
 // that the process serving the pipe really is us.
 
+#[cfg(windows)]
 use windows::core::PWSTR;
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
+#[cfg(windows)]
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+#[cfg(windows)]
 use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
+/// On Linux there is no SID; the numeric uid plays the same role — it keeps two
+/// accounts on the same machine off each other's relay socket.
+#[cfg(unix)]
+pub fn current_user_sid() -> Option<String> {
+    Some(unsafe { libc::getuid() }.to_string())
+}
+
 /// The SID of the account this process runs as, as `S-1-5-21-…`.
+#[cfg(windows)]
 pub fn current_user_sid() -> Option<String> {
     unsafe {
         let mut token = HANDLE::default();

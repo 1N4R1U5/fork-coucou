@@ -2,7 +2,7 @@
 // Mirrors IslandRootView.swift + IslandWindowController.swift.
 
 import { Tracked, Spring, clamp } from "../core/anim";
-import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
+import { Bridge, IS_LINUX, IS_TAURI, onDragDrop } from "../core/bridge";
 import {
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
   ROUNDED_CORNER, VIEW_LAYOUTS, botGlowColor, botGlowOpacity, botPosition, chatPromptHeight,
@@ -337,6 +337,14 @@ export class Island {
   /** An alert stopped waiting for an answer: let the island auto-close again. */
   dropPin() {
     this.fsm.pinned = false;
+    // The close timer was refused while pinned. With the pointer already away,
+    // no leave will come to start it, and the island would stay open for good.
+    if (!this.wasInIsland) {
+      this.fsm.mouseLeft();
+      if (this.fsm.state === "home") {
+        this.homeCollapseAt = performance.now() + State.settings.autoCloseInterval * 1000;
+      }
+    }
   }
 
   // ── File drop ───────────────────────────────────────────────────────────────
@@ -513,11 +521,13 @@ export class Island {
         this.collapseTimer = null;
         if (State.mode !== "hidden") return;
         this.collapsed = true;
+        document.body.classList.add("asleep");
         void Bridge.setCollapsed(true);
       }, 420);
     } else if (this.collapsed) {
       // Grow the window back before the island animates open.
       this.collapsed = false;
+      document.body.classList.remove("asleep");
       void Bridge.setCollapsed(false);
     }
   }
@@ -550,6 +560,21 @@ export class Island {
     });
 
     void onDragDrop((e) => this.onDragDrop(e));
+
+    if (IS_LINUX) {
+      // The window only takes the mouse over the island, and under XWayland the
+      // cursor poll stops moving once the pointer is outside it — it would keep
+      // reporting the last position on the island forever. The window does get
+      // told when the pointer leaves, so treat that as the cursor going away.
+      window.addEventListener("mouseout", (e) => {
+        if (e.relatedTarget == null) this.onCursor(-10_000, -10_000);
+      });
+      // Clicking the island lets it take focus here (there is no no-activate flag),
+      // so losing focus means the user clicked somewhere else: close, as Escape does.
+      window.addEventListener("blur", () => {
+        if (State.mode === "expanded" && !State.isPinned) this.collapse();
+      });
+    }
 
     // Outside Tauri (plain browser) drive the cursor from DOM events so the
     // island can be inspected with `npm run dev`.

@@ -12,6 +12,11 @@ let version = "";
 
 const root = document.getElementById("settings-root")!;
 
+/** Where API keys live, named the way this OS names it. */
+const KEYCHAIN = navigator.userAgent.includes("Windows")
+  ? "the Windows Credential Manager"
+  : "your system keychain";
+
 async function save() {
   await Bridge.saveSettings(settings);
 }
@@ -174,14 +179,14 @@ function claudeSection(status: HookStatus): HTMLElement {
 // ── Claude API section ────────────────────────────────────────────────────────
 
 const MODELS: [string, string][] = [
-  ["claude-opus-5", "Claude Opus 5"],
-  ["claude-sonnet-5", "Claude Sonnet 5"],
+  ["claude-opus-5-5", "Claude Opus 5.5"],
+  ["claude-sonnet-5-5", "Claude Sonnet 5.5"],
   ["claude-haiku-4-5", "Claude Haiku 4.5"],
 ];
 
 function apiSection(hasKey: boolean): HTMLElement {
   const dot = statusDot(hasKey);
-  const state = h("span", { class: "hint", text: hasKey ? "Key saved in the Windows Credential Manager." : "No key yet — the chat needs one." });
+  const state = h("span", { class: "hint", text: hasKey ? `Key saved in ${KEYCHAIN}.` : "No key yet — the chat needs one." });
 
   const field = h("input", {
     type: "password",
@@ -199,7 +204,7 @@ function apiSection(hasKey: boolean): HTMLElement {
     const present = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
     dot.style.background = present ? "#22c55e" : "#f4505e";
     state.textContent = present
-      ? "Key saved in the Windows Credential Manager."
+      ? `Key saved in ${KEYCHAIN}.`
       : "No key yet — the chat needs one.";
     field.placeholder = present ? "••••••••••••  (stored)" : "sk-ant-...";
     clearBtn.style.display = present ? "" : "none";
@@ -292,7 +297,7 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
 
   function updateNote() {
     const used = settings.activeIntegrations.length;
-    note.textContent = `Pick up to ${MAX_ACTIVE} pills to show next to Mochi — ${used}/${MAX_ACTIVE} in use. Keys are stored in the Windows Credential Manager, never on disk.`;
+    note.textContent = `Pick up to ${MAX_ACTIVE} pills to show next to Mochi — ${used}/${MAX_ACTIVE} in use. Keys are stored in ${KEYCHAIN}, never on disk.`;
   }
 
   for (const def of INTEGRATIONS) {
