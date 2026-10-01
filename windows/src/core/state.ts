@@ -105,7 +105,7 @@ export const DEFAULT_SETTINGS: Settings = {
   screen: "primary",
   autostart: false,
   hooksInstalled: false,
-  model: "claude-opus-5",
+  model: "claude-opus-5-5",
 };
 
 type Listener = () => void;

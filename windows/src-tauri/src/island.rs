@@ -12,15 +12,16 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-use windows::Win32::Foundation::{HWND, POINT};
-use windows::core::BOOL;
-use windows::Win32::Foundation::LPARAM;
-use windows::Win32::System::Ole::RevokeDragDrop;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
-use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW,
+#[cfg(windows)]
+use windows::{
+    core::BOOL,
+    Win32::Foundation::{HWND, LPARAM, POINT},
+    Win32::System::Ole::RevokeDragDrop,
+    Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
+    Win32::UI::WindowsAndMessaging::{
+        EnumChildWindows, GetClassNameW, GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW,
+        GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    },
 };
 
 /// Logical size of the full window — the largest island view, like the macOS panel.
@@ -114,10 +115,58 @@ pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(WINDOW_LABEL)
 }
 
+#[cfg(windows)]
 fn cursor_physical() -> Option<(f64, f64)> {
     let mut p = POINT::default();
     unsafe { GetCursorPos(&mut p).ok()? };
     Some((p.x as f64, p.y as f64))
+}
+
+/// The global pointer position and whether the left button is down, read from the
+/// X server. Under a Wayland session this goes through XWayland, so the position
+/// is only reliable while the pointer is over an X surface — the one place the
+/// notch-less peek behaviour is inherently weaker than on Windows/macOS.
+///
+/// The connection is cached per thread: the poll thread hits this ~60 times a
+/// second, and reopening an X connection each time would be wasteful.
+#[cfg(unix)]
+fn pointer_state() -> Option<(f64, f64, bool)> {
+    use std::cell::RefCell;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ConnectionExt, KeyButMask};
+    use x11rb::rust_connection::RustConnection;
+
+    thread_local! {
+        static CONN: RefCell<Option<(RustConnection, usize)>> = const { RefCell::new(None) };
+    }
+
+    CONN.with(|cell| {
+        if cell.borrow().is_none() {
+            *cell.borrow_mut() = x11rb::connect(None).ok();
+        }
+        let queried = {
+            let guard = cell.borrow();
+            let (conn, screen_num) = guard.as_ref()?;
+            let root = conn.setup().roots[*screen_num].root;
+            conn.query_pointer(root).ok().and_then(|c| c.reply().ok())
+        };
+        match queried {
+            Some(reply) => {
+                let left = reply.mask.contains(KeyButMask::BUTTON1);
+                Some((reply.root_x as f64, reply.root_y as f64, left))
+            }
+            None => {
+                // The server went away or refused us: reconnect on the next tick.
+                *cell.borrow_mut() = None;
+                None
+            }
+        }
+    })
+}
+
+#[cfg(unix)]
+fn cursor_physical() -> Option<(f64, f64)> {
+    pointer_state().map(|(x, y, _)| (x, y))
 }
 
 /// Lets dropped files reach the app again.
@@ -131,6 +180,7 @@ fn cursor_physical() -> Option<(f64, f64)> {
 /// that feeds Tauri's drag events.
 ///
 /// Cheap and idempotent, so it is simply re-run whenever a drag might be starting.
+#[cfg(windows)]
 pub fn unblock_webview_drops(app: &AppHandle) {
     for label in [WINDOW_LABEL, "settings"] {
         let Some(win) = app.get_webview_window(label) else { continue };
@@ -141,6 +191,12 @@ pub fn unblock_webview_drops(app: &AppHandle) {
     }
 }
 
+/// webkit2gtk delivers drags to the page without WebView2's render-widget
+/// interception, so there is nothing to unblock on Linux.
+#[cfg(unix)]
+pub fn unblock_webview_drops(_app: &AppHandle) {}
+
+#[cfg(windows)]
 unsafe extern "system" fn revoke_render_widget(hwnd: HWND, _: LPARAM) -> BOOL {
     let mut name = [0u16; 64];
     let len = unsafe { GetClassNameW(hwnd, &mut name) };
@@ -155,8 +211,14 @@ unsafe extern "system" fn revoke_render_widget(hwnd: HWND, _: LPARAM) -> BOOL {
 
 /// True while the left mouse button is held — the only signal we get that a
 /// drag might be in flight before it reaches the window.
+#[cfg(windows)]
 fn left_button_down() -> bool {
     unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
+}
+
+#[cfg(unix)]
+fn left_button_down() -> bool {
+    pointer_state().map(|(_, _, left)| left).unwrap_or(false)
 }
 
 fn monitor_contains(m: &Monitor, x: f64, y: f64) -> bool {
@@ -224,6 +286,7 @@ pub fn apply_geometry(app: &AppHandle, pref: &str, collapsed: bool) {
     let _ = win.set_always_on_top(true);
 }
 
+#[cfg(windows)]
 fn hwnd_of(win: &WebviewWindow) -> Option<HWND> {
     let raw = win.hwnd().ok()?.0 as isize;
     if raw == 0 {
@@ -234,6 +297,7 @@ fn hwnd_of(win: &WebviewWindow) -> Option<HWND> {
 
 /// WS_EX_NOACTIVATE keeps clicks from stealing focus; WS_EX_TOOLWINDOW keeps the
 /// island out of Alt-Tab.
+#[cfg(windows)]
 pub fn make_non_activating(win: &WebviewWindow) {
     let Some(hwnd) = hwnd_of(win) else { return };
     unsafe {
@@ -243,7 +307,16 @@ pub fn make_non_activating(win: &WebviewWindow) {
     }
 }
 
+/// No portable "no-activate" flag exists on X11/Wayland; keeping the island off
+/// the taskbar and switcher is the closest equivalent Tauri exposes. It may still
+/// take focus when clicked, which is a small, acceptable difference from Windows.
+#[cfg(unix)]
+pub fn make_non_activating(win: &WebviewWindow) {
+    let _ = win.set_skip_taskbar(true);
+}
+
 /// Temporarily allow activation so a text field inside the island can be typed in.
+#[cfg(windows)]
 pub fn set_activating(win: &WebviewWindow, activating: bool) {
     let Some(hwnd) = hwnd_of(win) else { return };
     unsafe {
@@ -256,6 +329,11 @@ pub fn set_activating(win: &WebviewWindow, activating: bool) {
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
     }
 }
+
+/// The island can already take focus on Linux (see `make_non_activating`), so
+/// there is nothing to toggle before a text field is typed in.
+#[cfg(unix)]
+pub fn set_activating(_win: &WebviewWindow, _activating: bool) {}
 
 /// Position, size and scale of the monitor the island lives on. Any change here
 /// means the island has to be placed again.
@@ -349,11 +427,20 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                     && y >= 0.0
                     && y <= size.1;
 
-                let accept = on_island || dragging;
-                if gate.ignoring.load(Ordering::Relaxed) == accept {
-                    gate.ignoring.store(!accept, Ordering::Relaxed);
-                    let _ = win.set_ignore_cursor_events(!accept);
+                // On Linux the input region already follows the island shape (see
+                // `apply_click_through`); toggling the whole window here would
+                // deadlock under XWayland, where the pointer is never reported
+                // again once the window stops taking it.
+                #[cfg(windows)]
+                {
+                    let accept = on_island || dragging;
+                    if gate.ignoring.load(Ordering::Relaxed) == accept {
+                        gate.ignoring.store(!accept, Ordering::Relaxed);
+                        let _ = win.set_ignore_cursor_events(!accept);
+                    }
                 }
+                #[cfg(unix)]
+                let _ = (on_island, dragging);
 
                 let _ = win.emit("cursor", CursorPayload { x, y });
             }
@@ -361,8 +448,48 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
     });
 }
 
-pub fn set_ignore_cursor(app: &AppHandle, ignore: bool) {
+/// Re-establishes click-through after a resize or a new island shape.
+///
+/// Windows: the window takes the mouse until the next poll tick decides.
+#[cfg(windows)]
+pub fn apply_click_through(app: &AppHandle, gate: &PollGate) {
     if let Some(win) = window(app) {
-        let _ = win.set_ignore_cursor_events(ignore);
+        let _ = win.set_ignore_cursor_events(false);
     }
+    gate.forget_ignore_state();
+}
+
+/// Linux: the window's input region is set to the island shape itself, so the
+/// compositor routes clicks outside it to whatever is behind. Polling the cursor
+/// to toggle click-through cannot work here: under XWayland the X server only
+/// learns where the pointer is while it is over an X surface, so once the whole
+/// window ignores the mouse it never sees the pointer come back and every click
+/// falls through to the desktop.
+#[cfg(unix)]
+pub fn apply_click_through(app: &AppHandle, gate: &PollGate) {
+    let Some(win) = window(app) else { return };
+    let collapsed = gate.collapsed.load(Ordering::Relaxed);
+    let r = *gate.rect.lock().unwrap();
+    let _ = app.run_on_main_thread(move || {
+        use gtk::cairo::{RectangleInt, Region};
+        use gtk::prelude::*;
+
+        let Ok(gtk_win) = win.gtk_window() else { return };
+        if collapsed {
+            // The wake strip must take the mouse everywhere.
+            gtk_win.input_shape_combine_region(None);
+            return;
+        }
+        let Some(gdk_win) = gtk_win.window() else { return };
+        let rect = if r.w > 0.0 {
+            let x = (r.x - HIT_MARGIN).floor().max(0.0) as i32;
+            let y = (r.y - HIT_MARGIN).floor().max(0.0) as i32;
+            let right = (r.x + r.w + HIT_MARGIN).ceil() as i32;
+            let bottom = (r.y + r.h + HIT_MARGIN).ceil() as i32;
+            RectangleInt::new(x, y, (right - x).max(1), (bottom - y).max(1))
+        } else {
+            RectangleInt::new(0, 0, 1, 1)
+        };
+        gdk_win.input_shape_combine_region(&Region::create_rectangle(&rect), 0, 0);
+    });
 }

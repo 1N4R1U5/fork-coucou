@@ -1358,3 +1358,12 @@ input[type="range"]::-webkit-slider-thumb {
 .int-card.detail {
   padding-top: 8px;
 }
+
+/* Hidden island: the views stay in the DOM, and their looping CSS animations
+   (shimmer, pulse, typing dots, marching dashes) would keep the compositor
+   painting every frame. Nothing is visible, so nothing may move. */
+body.asleep *,
+body.asleep *::before,
+body.asleep *::after {
+  animation-play-state: paused !important;
+}

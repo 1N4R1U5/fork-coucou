@@ -28,6 +28,7 @@ const DECISION_BUDGET: Duration = Duration::from_secs(110);
 
 /// `ERROR_PIPE_BUSY` — every instance is serving someone else right now. This is
 /// the one error worth retrying: the server exists and a slot will free up.
+#[cfg(windows)]
 const ERROR_PIPE_BUSY: i32 = 231;
 
 /// Fields that are pointless to forward and can be enormous (a whole file read,
@@ -42,14 +43,27 @@ mod win;
 /// `\\.\pipe\coucou-<sid>`. The SID keeps two accounts on the same machine from
 /// ever meeting on the same pipe; the name falls back to the user name only if
 /// the SID cannot be read at all, which should not happen.
+#[cfg(windows)]
 fn pipe_path() -> String {
     let key = win::current_user_sid()
         .unwrap_or_else(|| std::env::var("USERNAME").unwrap_or_else(|_| "user".into()));
     format!(r"\\.\pipe\coucou-{key}")
 }
 
+/// `$XDG_RUNTIME_DIR/coucou-<uid>.sock` — must match the app's `socket_path()`.
+#[cfg(unix)]
+fn pipe_path() -> String {
+    let key = win::current_user_sid().unwrap_or_else(|| "user".into());
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(std::env::temp_dir);
+    base.join(format!("coucou-{key}.sock")).to_string_lossy().into_owned()
+}
+
 /// Opens the pipe. Retries only while the server is busy: any other error means
 /// there is nothing to talk to, and waiting would only delay Claude Code.
+#[cfg(windows)]
 fn connect() -> Option<std::fs::File> {
     use std::os::windows::io::AsRawHandle;
     let path = pipe_path();
@@ -63,6 +77,28 @@ fn connect() -> Option<std::fs::File> {
             }
             Err(err) => {
                 if err.raw_os_error() != Some(ERROR_PIPE_BUSY) || Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
+        }
+    }
+}
+
+/// Connects to the relay socket. The 0600 socket in our own runtime dir already
+/// guarantees it is ours, so there is no server-identity check to make here.
+#[cfg(unix)]
+fn connect() -> Option<std::os::unix::net::UnixStream> {
+    use std::os::unix::net::UnixStream;
+    let path = pipe_path();
+    let deadline = Instant::now() + CONNECT_TIMEOUT;
+    loop {
+        match UnixStream::connect(&path) {
+            Ok(stream) => return Some(stream),
+            Err(err) => {
+                // Only a full backlog is worth waiting on. No socket, or nobody
+                // listening on it, means Coucou is closed: leave right away.
+                if err.kind() != std::io::ErrorKind::WouldBlock || Instant::now() >= deadline {
                     return None;
                 }
                 std::thread::sleep(Duration::from_millis(15));

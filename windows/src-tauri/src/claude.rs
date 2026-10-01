@@ -20,7 +20,11 @@ const MAX_TOKENS: u32 = 4096;
 /// Text and code files are inlined; anything larger is skipped, as on macOS.
 const MAX_INLINE_TEXT: u64 = 200_000;
 
-pub const DEFAULT_MODEL: &str = "claude-opus-5";
+pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
+
+/// Models that accept `fallbacks: "default"`. Sending it to any other model
+/// (Haiku 4.5, Sonnet 5, …) would get the whole request rejected.
+const FALLBACK_MODELS: &[&str] = &["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
 
 const SYSTEM_PROMPT: &str = "You are Mochi, a personal AI assistant living at the top of the user's screen. \
 You have web search access and can help with absolutely anything — research, coding, finding places, recommendations, tasks, questions. \
@@ -105,16 +109,19 @@ pub async fn send(
 
     chat.push(json!({ "role": "user", "content": content }));
 
-    let body = json!({
+    let mut body = json!({
         "model": model,
         "max_tokens": MAX_TOKENS,
         "system": SYSTEM_PROMPT,
-        "tools": [{ "type": "web_search_20260209", "name": "web_search", "max_uses": 5 }],
-        "fallbacks": "default",
+        "tools": [{ "type": web_search_tool(model), "name": "web_search", "max_uses": 5 }],
         "messages": chat.snapshot(),
     });
+    let fallback = FALLBACK_MODELS.contains(&model);
+    if fallback {
+        body["fallbacks"] = json!("default");
+    }
 
-    let response = match call(&key, &body).await {
+    let response = match call(&key, &body, fallback).await {
         Ok(v) => v,
         Err(err) => {
             chat.pop(); // keep the history consistent with what the model saw
@@ -157,18 +164,31 @@ pub async fn send(
     Ok(ChatReply { text })
 }
 
-async fn call(key: &str, body: &Value) -> Result<Value, String> {
+/// The dynamic-filtering web search exists on Opus 4.6+ / Sonnet 4.6+ only;
+/// Haiku and older models take the basic variant.
+fn web_search_tool(model: &str) -> &'static str {
+    if model.starts_with("claude-haiku") {
+        "web_search_20250305"
+    } else {
+        "web_search_20260209"
+    }
+}
+
+async fn call(key: &str, body: &Value, fallback: bool) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(90))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let response = client
+    let mut request = client
         .post(ENDPOINT)
         .header("x-api-key", key)
         .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("anthropic-beta", FALLBACK_BETA)
-        .header("content-type", "application/json")
+        .header("content-type", "application/json");
+    if fallback {
+        request = request.header("anthropic-beta", FALLBACK_BETA);
+    }
+    let response = request
         .json(body)
         .send()
         .await

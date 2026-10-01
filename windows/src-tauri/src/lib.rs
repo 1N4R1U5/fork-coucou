@@ -9,9 +9,11 @@ mod log;
 mod pipe;
 mod secrets;
 mod settings;
+mod systime;
 mod tray;
 mod win_user;
 
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::sync::atomic::Ordering;
@@ -29,6 +31,7 @@ use pipe::Pending;
 use settings::Settings;
 
 /// Keeps spawned helpers from flashing a console window.
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct Shared {
@@ -94,15 +97,18 @@ fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool) {
     shared.gate.collapsed.store(collapsed, Ordering::Relaxed);
     island::apply_geometry(&app, &pref, collapsed);
     // The wake strip must always take the mouse, and a resize invalidates the flag.
-    island::set_ignore_cursor(&app, false);
-    shared.gate.forget_ignore_state();
+    island::apply_click_through(&app, &shared.gate);
     shared.gate.set_active(!collapsed);
 }
 
 /// The front end pushes the island shape; Rust decides click-through from it.
 #[tauri::command]
-fn set_island_rect(shared: State<Shared>, x: f64, y: f64, width: f64, height: f64) {
+fn set_island_rect(app: AppHandle, shared: State<Shared>, x: f64, y: f64, width: f64, height: f64) {
     shared.gate.set_rect(island::IslandRect { x, y, w: width, h: height });
+    #[cfg(unix)]
+    island::apply_click_through(&app, &shared.gate);
+    #[cfg(windows)]
+    let _ = app;
 }
 
 #[tauri::command]
@@ -126,38 +132,137 @@ fn open_url(url: String) {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return;
     }
-    let _ = Command::new("rundll32.exe")
-        .args(["url.dll,FileProtocolHandler", &url])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
+    #[cfg(windows)]
+    {
+        let _ = Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", &url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+    }
+    #[cfg(unix)]
+    {
+        let _ = external("xdg-open").arg(&url).spawn();
+    }
 }
 
 /// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
-/// and falls back to Explorer otherwise.
+/// and falls back to the system file manager otherwise.
 #[tauri::command]
 fn open_in_vscode(path: Option<String>) -> bool {
-    // No `cmd /C` anywhere near this. The path is a project folder chosen by
-    // whoever is using Claude Code, and cmd would happily read `&`, `^` and `%`
-    // in a folder name as syntax. Finding the launcher ourselves and handing the
-    // path over as a separate argument keeps it a path.
+    // No shell anywhere near this. The path is a project folder chosen by whoever
+    // is using Claude Code, and a shell would happily read metacharacters in a
+    // folder name as syntax. Finding the launcher ourselves and handing the path
+    // over as a separate argument keeps it a path.
     if let Some(code) = find_on_path("code") {
-        let mut cmd = Command::new(code);
+        let mut cmd = external(code);
         if let Some(p) = path.as_deref().filter(|p| !p.is_empty()) {
             cmd.arg(p);
         }
-        if cmd.creation_flags(CREATE_NO_WINDOW).spawn().is_ok() {
+        #[cfg(windows)]
+        let spawned = cmd.creation_flags(CREATE_NO_WINDOW).spawn().is_ok();
+        #[cfg(unix)]
+        let spawned = cmd.spawn().is_ok();
+        if spawned {
             return true;
         }
     }
     if let Some(p) = path.as_deref().filter(|p| !p.is_empty()) {
+        #[cfg(windows)]
         let _ = Command::new("explorer").arg(p).spawn();
+        #[cfg(unix)]
+        if !open_terminal_in(p) {
+            let _ = external("xdg-open").arg(p).spawn();
+        }
     }
     false
+}
+
+/// Opens a terminal emulator in `dir`: $TERMINAL first, then the usual ones.
+/// The folder is handed over as the working directory, never through a shell.
+#[cfg(unix)]
+fn open_terminal_in(dir: &str) -> bool {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Ok(t) = std::env::var("TERMINAL") {
+        if !t.is_empty() {
+            candidates.push(t);
+        }
+    }
+    candidates.extend(
+        [
+            "konsole", "gnome-terminal", "kgx", "xfce4-terminal", "tilix", "alacritty",
+            "kitty", "wezterm", "foot", "x-terminal-emulator", "xterm",
+        ]
+        .map(String::from),
+    );
+    for name in candidates {
+        let Some(bin) = find_on_path(&name) else { continue };
+        let mut cmd = external(&bin);
+        cmd.current_dir(dir);
+        // These two talk to an already-running server, which ignores our cwd.
+        match name.as_str() {
+            "gnome-terminal" | "kgx" => {
+                cmd.arg(format!("--working-directory={dir}"));
+            }
+            _ => {}
+        }
+        if cmd.spawn().is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Set when `run()` forced XWayland for the island; programs we launch must not
+/// inherit that choice.
+#[cfg(unix)]
+static FORCED_X11: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A command for a program outside Coucou (browser, editor, terminal, file
+/// manager). Inside an AppImage the environment points library, plugin and
+/// interpreter paths into our own mount, and a Qt or Python app started with
+/// those either crashes or silently fails to open. Strip every entry that lives
+/// under $APPDIR, and the backend we forced, so the program sees the user's
+/// normal session.
+#[cfg(unix)]
+fn external(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    if FORCED_X11.load(Ordering::Relaxed) {
+        cmd.env_remove("GDK_BACKEND");
+    }
+    if let Some(appdir) = std::env::var_os("APPDIR").and_then(|a| a.into_string().ok()) {
+        let appdir = appdir.trim_end_matches('/').to_string();
+        if !appdir.is_empty() {
+            for (key, value) in std::env::vars() {
+                if !value.contains(&appdir) {
+                    continue;
+                }
+                let kept: Vec<&str> = value
+                    .split(':')
+                    .filter(|part| !part.is_empty() && !part.starts_with(&appdir))
+                    .collect();
+                if kept.is_empty() {
+                    cmd.env_remove(&key);
+                } else {
+                    cmd.env(&key, kept.join(":"));
+                }
+            }
+            for key in ["APPDIR", "APPIMAGE", "ARGV0", "OWD"] {
+                cmd.env_remove(key);
+            }
+        }
+    }
+    cmd
+}
+
+#[cfg(windows)]
+fn external(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    Command::new(program)
 }
 
 /// Our own `where`: walks %PATH% against %PATHEXT%, no shell involved.
 /// Rust quotes arguments correctly for `.cmd`/`.bat` targets since 1.77, so
 /// spawning `code.cmd` directly is safe.
+#[cfg(windows)]
 fn find_on_path(stem: &str) -> Option<std::path::PathBuf> {
     let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
     let dirs = std::env::var_os("PATH")?;
@@ -167,6 +272,19 @@ fn find_on_path(stem: &str) -> Option<std::path::PathBuf> {
             if candidate.is_file() {
                 return Some(candidate);
             }
+        }
+    }
+    None
+}
+
+/// Our own `which`: the first entry on $PATH that is a regular file.
+#[cfg(unix)]
+fn find_on_path(stem: &str) -> Option<std::path::PathBuf> {
+    let dirs = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&dirs) {
+        let candidate = dir.join(stem);
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     None
@@ -366,6 +484,21 @@ fn open_settings_window(app: AppHandle) {
 }
 
 pub fn run() {
+    // On a Wayland session a client cannot place its own top-level window, so the
+    // compositor drops the island in the centre instead of at the top edge, and
+    // the global cursor position needed for the peek/click-through is unreadable.
+    // Running through XWayland restores both. Done before any GTK code touches the
+    // display, and only when the user has not chosen a backend themselves.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("GDK_BACKEND").is_none()
+            && std::env::var_os("WAYLAND_DISPLAY").is_some()
+        {
+            std::env::set_var("GDK_BACKEND", "x11");
+            FORCED_X11.store(true, Ordering::Relaxed);
+        }
+    }
+
     let loaded = settings::load();
     let gate = Arc::new(PollGate::new());
 

@@ -48,6 +48,7 @@ impl Default for Settings {
 }
 
 /// %APPDATA%\Coucou
+#[cfg(windows)]
 pub fn config_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
@@ -55,7 +56,14 @@ pub fn config_dir() -> PathBuf {
     base.join("Coucou")
 }
 
+/// $XDG_CONFIG_HOME/coucou (usually ~/.config/coucou)
+#[cfg(unix)]
+pub fn config_dir() -> PathBuf {
+    xdg_dir("XDG_CONFIG_HOME", ".config")
+}
+
 /// %LOCALAPPDATA%\Coucou — where coucou-hook.exe and the log live.
+#[cfg(windows)]
 pub fn local_dir() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
@@ -63,8 +71,31 @@ pub fn local_dir() -> PathBuf {
     base.join("Coucou")
 }
 
+/// $XDG_DATA_HOME/coucou (usually ~/.local/share/coucou) — the relay and log live here.
+#[cfg(unix)]
+pub fn local_dir() -> PathBuf {
+    xdg_dir("XDG_DATA_HOME", ".local/share")
+}
+
+/// An XDG base dir with its home-relative fallback, ending in `coucou`.
+#[cfg(unix)]
+fn xdg_dir(var: &str, fallback: &str) -> PathBuf {
+    let base = std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)))
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("coucou")
+}
+
+#[cfg(windows)]
 pub fn hook_exe_path() -> PathBuf {
     local_dir().join("bin").join("coucou-hook.exe")
+}
+
+#[cfg(unix)]
+pub fn hook_exe_path() -> PathBuf {
+    local_dir().join("bin").join("coucou-hook")
 }
 
 fn settings_path() -> PathBuf {

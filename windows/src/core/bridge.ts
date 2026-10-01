@@ -10,6 +10,10 @@ import type { Settings } from "./state";
 export const IS_TAURI =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+/** Linux build: the island's input region follows its shape (see island.rs). */
+export const IS_LINUX =
+  IS_TAURI && navigator.userAgent.includes("Linux") && !navigator.userAgent.includes("Android");
+
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
   if (!IS_TAURI) return null;
   try {

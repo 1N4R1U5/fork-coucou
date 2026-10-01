@@ -6,16 +6,30 @@
 //! the pipe name carries our SID, and once connected we check the server process
 //! really belongs to us before sending anything.
 
+#[cfg(windows)]
 use windows::core::PWSTR;
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE, LocalFree, HLOCAL};
+#[cfg(windows)]
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+#[cfg(windows)]
 use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+#[cfg(windows)]
 use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
+/// On Linux the numeric uid stands in for the SID: it names the relay socket, and
+/// the socket's 0600 permission is what keeps other accounts out.
+#[cfg(unix)]
+pub fn current_user_sid() -> Option<String> {
+    Some(unsafe { libc::getuid() }.to_string())
+}
+
 /// The SID of the account this process runs as, as `S-1-5-21-…`.
+#[cfg(windows)]
 pub fn current_user_sid() -> Option<String> {
     unsafe { token_sid(GetCurrentProcess()) }
 }
@@ -25,6 +39,7 @@ pub fn current_user_sid() -> Option<String> {
 /// A failure to answer is treated as "not ours": refusing to talk to a pipe we
 /// cannot vouch for costs one hook event, while trusting it could hand another
 /// account on this machine the contents of every tool call.
+#[cfg(windows)]
 pub fn pipe_server_is_same_user(handle: HANDLE) -> bool {
     let Some(mine) = current_user_sid() else { return false };
     unsafe {
@@ -42,6 +57,7 @@ pub fn pipe_server_is_same_user(handle: HANDLE) -> bool {
 }
 
 /// The user SID behind a process handle. `process` is borrowed, never closed.
+#[cfg(windows)]
 unsafe fn token_sid(process: HANDLE) -> Option<String> {
     let mut token = HANDLE::default();
     OpenProcessToken(process, TOKEN_QUERY, &mut token).ok()?;
