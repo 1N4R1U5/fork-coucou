@@ -89,7 +89,7 @@ function claudeSection(status: HookStatus): HTMLElement {
     if (!status.hookReady) {
       body.append(h("div", {
         class: "notice warn",
-        text: "coucou-hook.exe is not in place yet. Restart Coucou; if it still fails, build it with `cargo build -p coucou-hook`.",
+        text: "coucou-hook is not in place yet. Restart Coucou; if it still fails, build it with `cargo build -p coucou-hook`.",
       }));
     }
 
@@ -184,9 +184,18 @@ const MODELS: [string, string][] = [
   ["claude-haiku-4-5", "Claude Haiku 4.5"],
 ];
 
-function apiSection(hasKey: boolean): HTMLElement {
-  const dot = statusDot(hasKey);
-  const state = h("span", { class: "hint", text: hasKey ? `Key saved in ${KEYCHAIN}.` : "No key yet — the chat needs one." });
+type ChatBackend = "api" | "cli" | "none";
+
+const BACKEND_TEXT: Record<ChatBackend, string> = {
+  cli: "The chat runs through Claude Code, on your Claude subscription. Nothing else to set up.",
+  api: `The chat uses your API key (billed per use by Anthropic). Remove it to go back to your Claude subscription.`,
+  none: "Install Claude Code and log in to chat on your Claude subscription, or add an API key.",
+};
+
+function apiSection(backend: ChatBackend): HTMLElement {
+  const hasKey = backend === "api";
+  const dot = statusDot(backend !== "none");
+  const state = h("span", { class: "hint", text: BACKEND_TEXT[backend] });
 
   const field = h("input", {
     type: "password",
@@ -201,13 +210,13 @@ function apiSection(hasKey: boolean): HTMLElement {
   const feedback = h("div", {});
 
   async function refresh() {
-    const present = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
-    dot.style.background = present ? "#22c55e" : "#f4505e";
-    state.textContent = present
-      ? `Key saved in ${KEYCHAIN}.`
-      : "No key yet — the chat needs one.";
+    const now: ChatBackend = (await Bridge.chatBackend()) ?? "none";
+    const present = now === "api";
+    dot.style.background = now !== "none" ? "#22c55e" : "#f4505e";
+    state.textContent = BACKEND_TEXT[now];
     field.placeholder = present ? "••••••••••••  (stored)" : "sk-ant-...";
     clearBtn.style.display = present ? "" : "none";
+    modelRow.style.display = present ? "" : "none";
   }
 
   saveBtn.addEventListener("click", async () => {
@@ -217,7 +226,7 @@ function apiSection(hasKey: boolean): HTMLElement {
     try {
       await Bridge.secretSet("anthropic-api-key", value);
       field.value = "";
-      feedback.append(h("div", { class: "notice ok", text: "Saved. It never touches disk." }));
+      feedback.append(h("div", { class: "notice ok", text: `Saved in ${KEYCHAIN}. It never touches disk.` }));
       await refresh();
     } catch (err) {
       feedback.append(h("div", { class: "notice err", text: `Could not save: ${String(err)}` }));
@@ -247,14 +256,17 @@ function apiSection(hasKey: boolean): HTMLElement {
   });
 
   clearBtn.style.display = hasKey ? "" : "none";
+  // Through Claude Code the model is whatever Claude Code uses (/model there).
+  const modelRow = h("div", { class: "row" }, h("label", { text: "Model" }), model);
+  modelRow.style.display = hasKey ? "" : "none";
 
   return h(
     "section",
     {},
-    h("h2", {}, dot, h("span", { text: "Claude" })),
+    h("h2", {}, dot, h("span", { text: "Chat" })),
     state,
-    h("div", { class: "row" }, h("label", { text: "API key" }), field, saveBtn, clearBtn),
-    h("div", { class: "row" }, h("label", { text: "Model" }), model),
+    h("div", { class: "row" }, h("label", { text: "API key (optional)" }), field, saveBtn, clearBtn),
+    modelRow,
     feedback,
   );
 }
@@ -434,7 +446,7 @@ async function main() {
     installed: false, settingsPath: "", hookPath: "", hookReady: false,
   };
 
-  const hasKey = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
+  const backend: ChatBackend = (await Bridge.chatBackend()) ?? "none";
 
   const keys = [
     "stripe-api-key", "github-token", "vercel-token",
@@ -447,7 +459,7 @@ async function main() {
   root.append(
     h("h1", {}, h("span", { text: "Coucou" }), h("span", { class: "version", text: version })),
     claudeSection(status),
-    apiSection(hasKey),
+    apiSection(backend),
     integrationsSection(present),
     generalSection(),
     h("div", {

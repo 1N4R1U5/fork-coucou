@@ -111,6 +111,11 @@ fn connect() -> Option<std::os::unix::net::UnixStream> {
 }
 
 fn main() {
+    // Coucou's own chat runs through `claude -p`; its events are not a session
+    // to show in the island.
+    if std::env::var_os("COUCOU_CHAT").is_some() {
+        std::process::exit(0);
+    }
     let Some((payload, event)) = read_event() else { std::process::exit(0) };
 
     let waits_for_answer = event == "PermissionRequest";

@@ -99,6 +99,8 @@ export const Bridge = {
   chatSend: (query: string, context: ChatContext | null) =>
     callOrThrow<{ text: string }>("chat_send", { query, context }),
   chatReset: () => call<void>("chat_reset"),
+  /** "api" (key set), "cli" (Claude Code, on the subscription) or "none". */
+  chatBackend: () => call<"api" | "cli" | "none">("chat_backend"),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
   /** Only ever tells you whether a key exists — never its value. */
@@ -124,6 +126,7 @@ export interface IntegrationUpdate {
 
 export type ChatContext =
   | { kind: "file"; name: string; path: string }
+  | { kind: "files"; files: { name: string; path: string }[] }
   | { kind: "window"; appName: string; title: string; url?: string };
 
 export interface DroppedFile {
@@ -162,6 +165,8 @@ export type BridgeEvent =
 export interface DragDropPayload {
   type: "enter" | "over" | "drop" | "leave";
   paths?: string[];
+  /** Physical pixels, relative to the webview. Absent on "leave". */
+  position?: { x: number; y: number };
 }
 
 /** Files dragged onto the island. Only reaches us when the window takes the mouse. */

@@ -216,9 +216,16 @@ fn left_button_down() -> bool {
     unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
 }
 
+/// Cursor position and left button in one go: on Linux that is a single X
+/// round trip per poll tick instead of two.
 #[cfg(unix)]
-fn left_button_down() -> bool {
-    pointer_state().map(|(_, _, left)| left).unwrap_or(false)
+fn pointer() -> Option<(f64, f64, bool)> {
+    pointer_state()
+}
+
+#[cfg(windows)]
+fn pointer() -> Option<(f64, f64, bool)> {
+    cursor_physical().map(|(x, y)| (x, y, left_button_down()))
 }
 
 fn monitor_contains(m: &Monitor, x: f64, y: f64) -> bool {
@@ -383,7 +390,7 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                 let Some(win) = window(&app) else { continue };
                 let Ok(origin) = win.outer_position() else { continue };
                 let scale = win.scale_factor().unwrap_or(1.0);
-                let Some((cx, cy)) = cursor_physical() else { continue };
+                let Some((cx, cy, down)) = pointer() else { continue };
                 let x = (cx - origin.x as f64) / scale;
                 let y = (cy - origin.y as f64) / scale;
                 let size = match win.inner_size() {
@@ -414,7 +421,6 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                 // the mouse, which also makes the drop zone as forgiving as the Mac's.
                 // A press may be the start of a drag: make sure the drop target is
                 // ours before the file arrives.
-                let down = left_button_down();
                 if down && !was_down {
                     let handle = app.clone();
                     let _ = app.run_on_main_thread(move || unblock_webview_drops(&handle));

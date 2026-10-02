@@ -13,6 +13,9 @@ export interface AgentTask {
   state: BotStateName;
   stepIndex: number;
   steps: string[];
+  /** Steps ever appended this session. `steps` keeps only the last 20, so once
+   *  it is full `stepIndex` stops moving; this keeps counting. */
+  stepTotal?: number;
   source: AgentSource;
   isIntegration: boolean;
   emote?: BotEmoteName | null;
@@ -74,7 +77,8 @@ export interface ChatMessage {
 
 export type PromptContext =
   | { kind: "window"; appName: string; title: string; url?: string }
-  | { kind: "file"; name: string; path?: string };
+  | { kind: "file"; name: string; path?: string }
+  | { kind: "files"; files: { name: string; path: string }[] };
 
 export interface ResultItem {
   label: string;
@@ -174,7 +178,8 @@ class AppState {
   fileDragOver = false;
 
   promptContext: PromptContext | null = null;
-  droppedFile: { name: string; path: string } | null = null;
+  /** Files dropped on Mochi, in drop order; the chat sends all of them. */
+  droppedFiles: { name: string; path: string }[] = [];
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
   chatHistory: ChatMessage[] = [];
@@ -231,6 +236,7 @@ class AppState {
     t.steps.push(step);
     if (t.steps.length > 20) t.steps.shift();
     t.stepIndex = t.steps.length - 1;
+    t.stepTotal = (t.stepTotal ?? 0) + 1;
     this.notify();
   }
 
@@ -268,6 +274,13 @@ class AppState {
       this.settings.activeIntegrations = [...active, id];
     }
     this.loadIntegrationTasks();
+  }
+
+  /** "brief.pdf", or "brief.pdf +2" when several files were dropped together. */
+  get droppedLabel(): string {
+    const [first, ...rest] = this.droppedFiles;
+    if (!first) return "file";
+    return rest.length ? `${first.name} +${rest.length}` : first.name;
   }
 
   defaultView(): IslandViewName {

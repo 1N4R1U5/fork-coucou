@@ -70,8 +70,8 @@ export function buildUploading(): ViewHost {
       const done = State.uploadProgress >= 0.999;
       const pct = Math.round(State.uploadProgress * 100);
       label.textContent = done
-        ? `✓  ${State.droppedFile?.name ?? "File"}`
-        : `Uploading ${State.droppedFile?.name ?? "file"}`;
+        ? `✓  ${State.droppedLabel}`
+        : `Uploading ${State.droppedLabel}`;
       label.classList.toggle("done", done);
       percent.textContent = done ? "" : `${pct} %`;
       const w = State.uploadProgress * 526;
@@ -115,8 +115,8 @@ export function buildChoose(actions: ViewActions): ViewHost {
     sync() {
       clear(title);
       title.append(
-        h("b", { text: State.droppedFile?.name ?? "file" }),
-        document.createTextNode(" is ready."),
+        h("b", { text: State.droppedLabel }),
+        document.createTextNode(State.droppedFiles.length > 1 ? " are ready." : " is ready."),
       );
     },
   };

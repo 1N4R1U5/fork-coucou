@@ -1,6 +1,7 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
 mod claude;
+mod claude_cli;
 mod files;
 mod hooks;
 mod integrations;
@@ -256,7 +257,7 @@ static FORCED_X11: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// under $APPDIR, and the backend we forced, so the program sees the user's
 /// normal session.
 #[cfg(unix)]
-fn external(program: impl AsRef<std::ffi::OsStr>) -> Command {
+pub(crate) fn external(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut cmd = Command::new(program);
     if FORCED_X11.load(Ordering::Relaxed) {
         cmd.env_remove("GDK_BACKEND");
@@ -287,7 +288,7 @@ fn external(program: impl AsRef<std::ffi::OsStr>) -> Command {
 }
 
 #[cfg(windows)]
-fn external(program: impl AsRef<std::ffi::OsStr>) -> Command {
+pub(crate) fn external(program: impl AsRef<std::ffi::OsStr>) -> Command {
     Command::new(program)
 }
 
@@ -577,6 +578,19 @@ async fn chat_send(
     claude::send(&chat, &model, query, context).await
 }
 
+/// What the chat will answer with: "api" (a key is set), "cli" (Claude Code on
+/// the user's subscription) or "none".
+#[tauri::command]
+fn chat_backend() -> &'static str {
+    if secrets::present("anthropic-api-key") {
+        "api"
+    } else if claude_cli::find().is_some() {
+        "cli"
+    } else {
+        "none"
+    }
+}
+
 #[tauri::command]
 fn chat_reset(chat: State<Chat>) {
     chat.reset();
@@ -680,20 +694,42 @@ fn create_settings_window(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
-            // Closing it must only hide it, or it could never be reopened.
-            let hidden = win.clone();
-            win.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = hidden.hide();
-                }
-            });
+            // Windows: closing it must only hide it, or it could never be reopened.
+            // Linux creates it on demand instead, so closing really closes it and
+            // gives back the memory of its web process.
+            #[cfg(windows)]
+            {
+                let hidden = win.clone();
+                win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = hidden.hide();
+                    }
+                });
+            }
+            #[cfg(unix)]
+            let _ = win;
         }
         Err(err) => log::line(format!("settings window failed: {err}")),
     }
 }
 
 pub fn show_settings_window(app: &AppHandle) {
+    // Linux: webkit2gtk has no trouble creating a window late, so the settings
+    // window only exists while it is open — a hidden one costs a whole web
+    // process (~160 MB) for nothing.
+    #[cfg(unix)]
+    if app.get_webview_window("settings").is_none() {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            create_settings_window(&handle);
+            if let Some(win) = handle.get_webview_window("settings") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        });
+        return;
+    }
     let Some(win) = app.get_webview_window("settings") else {
         log::line("settings window missing");
         return;
@@ -759,6 +795,7 @@ pub fn run() {
             log_line,
             chat_send,
             chat_reset,
+            chat_backend,
             ingest_file,
             secret_present,
             secret_set,
@@ -771,7 +808,8 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             tray::build(&handle)?;
-            // Before the island: see create_settings_window.
+            // Before the island: see create_settings_window. Linux makes it on demand.
+            #[cfg(windows)]
             create_settings_window(&handle);
 
             if let Some(win) = island::window(&handle) {

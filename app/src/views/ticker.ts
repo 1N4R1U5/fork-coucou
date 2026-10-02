@@ -31,20 +31,20 @@ interface Row {
 
 function makeRow(): Row {
   const chevron = svg(ICONS.chevronRight, 9, { stroke: 2.4 });
-  const check = svg(ICONS.check, 8, { stroke: 2.2 });
-  check.style.color = "#454850"; // the completed tick is dimmer than the chevron
-  check.style.position = "absolute";
+  // The completed tick: small and grey like the dimmed text, but readable — the
+  // old #454850 all but vanished on the card.
+  const check = svg(ICONS.check, 9, { stroke: 2.6 });
+  check.classList.add("tick-done");
   chevron.style.position = "absolute";
   const shimmer = h("span", { class: "tick-text shimmer" });
-  const dim = h("span", {
-    class: "tick-text",
-    style: "position:absolute;left:0;right:0;color:#6b7079",
-  });
+  const dim = h("span", { class: "tick-text", style: "color:#6b7079" });
   const el = h(
     "div",
     { class: "ticker-row" },
     h("span", { class: "tick-icon", style: "position:relative" }, chevron, check),
-    h("span", { style: "position:relative;flex:1 1 auto;min-width:0" }, shimmer, dim),
+    // Both texts share one grid cell so the crossfade lines them up exactly;
+    // an absolutely placed copy sat a pixel or two off and read as a double.
+    h("span", { class: "tick-stack" }, shimmer, dim),
   );
   return { el, chevron, check, shimmer, dim, text: "" };
 }
@@ -98,29 +98,25 @@ export class Ticker {
   sync(task: AgentTask | null) {
     const steps = task && task.steps.length > 0 ? task.steps : ["…"];
     const idx = task ? Math.min(task.stepIndex, steps.length - 1) : -1;
+    // Position of the current step in the whole session. `steps` is a sliding
+    // window, so once it is full `idx` stays put while new steps keep coming.
+    const seq = task ? Math.max(idx, (task.stepTotal ?? idx + 1) - 1) : -1;
+    const at = (s: number) => (s >= 0 ? steps[idx - (seq - s)] ?? "…" : "…");
 
-    // First render: drop straight into place, no animation.
-    if (this.displayIndex < 0) {
-      this.displayIndex = idx;
-      setText(this.a, idx > 0 ? steps[idx - 1] : "…");
-      setText(this.b, steps[Math.max(idx, 0)]);
-      this.rest();
-      return;
-    }
-
-    // The session restarted (steps were cleared): re-seed rather than scroll.
-    if (idx < this.displayIndex) {
+    // First render, or the session restarted (steps were cleared): drop
+    // straight into place rather than scroll.
+    if (this.displayIndex < 0 || seq < this.displayIndex) {
       this.queue = [];
       this.startMs = null;
-      this.displayIndex = idx;
-      setText(this.a, idx > 0 ? steps[idx - 1] : "…");
-      setText(this.b, steps[Math.max(idx, 0)]);
+      this.displayIndex = seq;
+      setText(this.a, at(seq - 1));
+      setText(this.b, at(Math.max(seq, 0)));
       this.rest();
       return;
     }
 
-    for (let i = this.displayIndex + 1; i <= idx; i++) this.queue.push(steps[i]);
-    this.displayIndex = idx;
+    for (let s = Math.max(this.displayIndex + 1, seq - MAX_QUEUE + 1); s <= seq; s++) this.queue.push(at(s));
+    this.displayIndex = seq;
     if (this.queue.length > MAX_QUEUE) {
       this.queue = this.queue.slice(-MAX_QUEUE);
     }

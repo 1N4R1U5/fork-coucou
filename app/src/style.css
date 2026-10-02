@@ -111,8 +111,11 @@ body {
 
 #upload-overlay {
   position: absolute;
-  inset: 0;
+  top: 0;
+  width: 640px;
+  height: 176px;
   display: none;
+  pointer-events: none;
 }
 
 /* Invisible hit areas over the buttons the canvas paints. */
@@ -131,6 +134,12 @@ body {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.22s ease-in-out;
+}
+
+/* `.view.on` turns clicks back on, and the invisible choose card then sat over
+   the buttons the drop canvas paints: Cancel landed on nothing. */
+#views.hidden-by-upload .view.on {
+  pointer-events: none;
 }
 
 #bot-glow {
@@ -436,7 +445,9 @@ body {
 .ticker {
   position: relative;
   height: 44px;
-  margin: 6px 12px 0 108px;
+  /* 10 px of room on the left: a completed row slides 10 px left, and its tick
+     used to be clipped away. */
+  margin: 6px 12px 0 98px;
   overflow: hidden;
   -webkit-mask-image: linear-gradient(
     to bottom,
@@ -450,7 +461,7 @@ body {
 
 .ticker-row {
   position: absolute;
-  left: 0;
+  left: 10px;
   right: 0;
   height: 22px;
   display: flex;
@@ -465,7 +476,22 @@ body {
   display: grid;
   place-items: center;
   flex: 0 0 12px;
-  color: var(--dim-2);
+  color: #d4d6da;
+}
+
+.ticker-row .tick-stack {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ticker-row .tick-stack > * {
+  grid-area: 1 / 1;
+}
+
+.ticker-row .tick-done {
+  position: absolute;
+  color: #8b9099;
 }
 
 .ticker-row .tick-text {
@@ -847,6 +873,15 @@ input[type="range"]::-webkit-slider-thumb {
 @keyframes typing {
   0%, 100% { transform: scale(0.6); }
   50% { transform: scale(1.2); }
+}
+
+.chat-nokey {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font: 500 12.5px var(--font);
+  color: var(--dim-2);
 }
 
 .chat-bar {
@@ -1619,3 +1654,12 @@ body.asleep *::after {
 .tk-t { color: #ffcb6b; }
 .tk-f { color: #82aaff; }
 .tk-c { color: var(--dim-4); font-style: italic; }
+
+/* Views that are not on screen keep their DOM (opacity 0), and with it their
+   looping animations: the ticker shimmer alone made WebKit repaint every
+   frame behind whatever view was showing. */
+.view:not(.on) *,
+.view:not(.on) *::before,
+.view:not(.on) *::after {
+  animation-play-state: paused !important;
+}

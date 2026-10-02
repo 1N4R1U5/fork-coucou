@@ -36,8 +36,16 @@ function contextChip(label: string): HTMLElement {
   return chip;
 }
 
-export function buildPrompt(onHeightChange: () => void): ViewHost {
+export function buildPrompt(onHeightChange: () => void, openSettings: () => void): ViewHost {
   const chipRow = h("div", { class: "chip-row" });
+  // Without an API key the chat can't answer: say so where the question would
+  // go, with the way out, instead of a dead-end error after sending.
+  const noKey = h(
+    "div",
+    { class: "chat-nokey" },
+    h("span", { text: "Chat needs Claude Code or an Anthropic API key." }),
+    h("button", { class: "btn secondary", text: "Open Settings", onclick: () => openSettings() }),
+  );
   const log = h("div", { class: "chat-log" });
   const input = h("input", {
     type: "text",
@@ -51,16 +59,26 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   const el = h(
     "div",
     { class: "view" },
-    h("div", { class: "card wash chat-card" }, h("div", { class: "chat-body" }, chipRow, log, bar)),
+    h("div", { class: "card wash chat-card" }, h("div", { class: "chat-body" }, chipRow, noKey, log, bar)),
   );
   (el.querySelector(".card") as HTMLElement).style.setProperty("--wash", "rgba(99,102,241,0.5)");
 
   let sending = false;
   let renderedCount = -1;
+  /** null until checked, and outside Tauri. */
+  let canChat: boolean | null = null;
+
+  async function checkKey() {
+    const backend = await Bridge.chatBackend();
+    const present = backend == null ? null : backend !== "none";
+    if (present === canChat) return;
+    canChat = present;
+    State.notify();
+  }
 
   async function submit() {
     const query = input.value.trim();
-    if (!query || sending) return;
+    if (!query || sending || canChat === false) return;
     input.value = "";
     sending = true;
     Sound.play("send");
@@ -70,9 +88,10 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     State.notify();
     onHeightChange();
 
-    const file = State.droppedFile;
-    const context: ChatContext | null =
-      State.chatHistory.length === 1 && file ? { kind: "file", name: file.name, path: file.path } : null;
+    // Sent on every turn: the Rust side only attaches it while its own history
+    // is empty, so a first message that failed doesn't lose the files.
+    const files = State.droppedFiles;
+    const context: ChatContext | null = files.length ? { kind: "files", files } : null;
 
     try {
       const reply = await Bridge.chatSend(query, context);
@@ -104,8 +123,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   return {
     el,
     sync() {
-      const file = State.droppedFile;
-      const wantChip = file?.name ?? "";
+      const wantChip = State.droppedFiles.length ? State.droppedLabel : "";
       if (chipRow.dataset.label !== wantChip) {
         chipRow.dataset.label = wantChip;
         clear(chipRow);
@@ -123,9 +141,12 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
       }
 
       input.placeholder = State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
-      input.disabled = sending;
+      input.disabled = sending || canChat === false;
+      noKey.style.display = canChat === false ? "" : "none";
     },
     focus() {
+      // Checked each time the chat opens: the key may have just been added.
+      void checkKey();
       input.focus();
       input.select();
     },

@@ -26,7 +26,7 @@ pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
 /// (Haiku 4.5, Sonnet 5, …) would get the whole request rejected.
 const FALLBACK_MODELS: &[&str] = &["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
 
-const SYSTEM_PROMPT: &str = "You are Mochi, a personal AI assistant living at the top of the user's screen. \
+pub(crate) const SYSTEM_PROMPT: &str = "You are Mochi, a personal AI assistant living at the top of the user's screen. \
 You have web search access and can help with absolutely anything — research, coding, finding places, recommendations, tasks, questions. \
 Respond in the user's language. Be thorough and complete — use as much detail as the task requires. \
 No markdown formatting (no **, no ##, no bullet dashes). Use plain text with line breaks.";
@@ -35,11 +35,14 @@ No markdown formatting (no **, no ##, no bullet dashes). Use plain text with lin
 pub struct Chat {
     /// Full multi-turn history, including tool_use / tool_result blocks.
     messages: Mutex<Vec<Value>>,
+    /// Claude Code session the chat continues when it runs through `claude -p`.
+    cli_session: Mutex<Option<String>>,
 }
 
 impl Chat {
     pub fn reset(&self) {
         self.messages.lock().unwrap().clear();
+        *self.cli_session.lock().unwrap() = None;
     }
 
     fn is_empty(&self) -> bool {
@@ -54,6 +57,14 @@ impl Chat {
         self.messages.lock().unwrap().pop();
     }
 
+    pub(crate) fn cli_session(&self) -> Option<String> {
+        self.cli_session.lock().unwrap().clone()
+    }
+
+    pub(crate) fn set_cli_session(&self, id: String) {
+        *self.cli_session.lock().unwrap() = Some(id);
+    }
+
     fn snapshot(&self) -> Vec<Value> {
         self.messages.lock().unwrap().clone()
     }
@@ -63,7 +74,14 @@ impl Chat {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ChatContext {
     File { name: String, path: String },
+    Files { files: Vec<FileRef> },
     Window { app_name: String, title: String, url: Option<String> },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileRef {
+    pub name: String,
+    pub path: String,
 }
 
 #[derive(Serialize)]
@@ -80,8 +98,10 @@ pub async fn send(
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
-    let key = secrets::get("anthropic-api-key")
-        .ok_or_else(|| "API key missing. Open settings.".to_string())?;
+    // No API key: go through Claude Code instead, on the user's subscription.
+    let Some(key) = secrets::get("anthropic-api-key") else {
+        return crate::claude_cli::send(chat, query, context).await;
+    };
 
     let mut content: Vec<Value> = Vec::new();
 
@@ -89,11 +109,11 @@ pub async fn send(
     // like ClaudeService.chat().
     if chat.is_empty() {
         match &context {
-            Some(ChatContext::File { name, path }) => {
-                if let Some(block) = file_block(path) {
-                    content.push(block);
+            Some(ChatContext::File { name, path }) => push_file(&mut content, name, path),
+            Some(ChatContext::Files { files }) => {
+                for f in files {
+                    push_file(&mut content, &f.name, &f.path);
                 }
-                content.push(json!({ "type": "text", "text": format!("File: {name}") }));
             }
             Some(ChatContext::Window { app_name, title, url }) => {
                 let mut text = format!("Context — App: {app_name}, Window: {title}");
@@ -214,6 +234,22 @@ async fn call(key: &str, body: &Value, fallback: bool) -> Result<Value, String> 
 
 /// PDF → document block, image → image block, text/code → inline text.
 /// Mirrors readFileAsBlock() in ClaudeService.swift.
+/// The file's contents, then its name. A file that can't be inlined (too big,
+/// binary, an unsupported format) is still named, with a note saying so, so
+/// Claude doesn't answer as if it had read it.
+fn push_file(content: &mut Vec<Value>, name: &str, path: &str) {
+    match file_block(path) {
+        Some(block) => {
+            content.push(block);
+            content.push(json!({ "type": "text", "text": format!("File: {name}") }));
+        }
+        None => content.push(json!({
+            "type": "text",
+            "text": format!("File: {name} (its contents could not be attached: too large or not a text, PDF or image file)"),
+        })),
+    }
+}
+
 fn file_block(path: &str) -> Option<Value> {
     let ext = std::path::Path::new(path)
         .extension()
@@ -231,6 +267,11 @@ fn file_block(path: &str) -> Option<Value> {
     };
 
     if let Some((block_type, media)) = media_type {
+        // Past these the API rejects the whole request, not just the file.
+        let cap: u64 = if block_type == "image" { 5_000_000 } else { 25_000_000 };
+        if std::fs::metadata(path).ok()?.len() > cap {
+            return None;
+        }
         let bytes = std::fs::read(path).ok()?;
         return Some(json!({
             "type": block_type,

@@ -70,7 +70,9 @@ export class UploadCanvas {
 
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D | null;
-  private overlay: HTMLElement;
+  /** The click targets. Mounted above the island's content by the island:
+   *  inside the layer they sat under it and never got a click. */
+  readonly overlay: HTMLElement;
   private sizedFor = 0;
 
   constructor(actions: UploadCanvasActions) {
@@ -95,7 +97,7 @@ export class UploadCanvas {
 
     this.el = document.createElement("div");
     this.el.id = "upload-layer";
-    this.el.append(this.canvas, this.overlay);
+    this.el.append(this.canvas);
 
     this.ctx = this.canvas.getContext("2d");
   }
@@ -119,6 +121,12 @@ export class UploadCanvas {
 
     // The buttons only exist once the choose card has faded in.
     this.overlay.style.display = f.chooseAlpha > 0.5 ? "block" : "none";
+  }
+
+  /** Shows or hides the layer; hidden, its buttons must not catch clicks. */
+  setActive(on: boolean) {
+    this.el.classList.toggle("on", on);
+    if (!on) this.overlay.style.display = "none";
   }
 
   // ── Scene ─────────────────────────────────────────────────────────────────
@@ -200,7 +208,7 @@ export class UploadCanvas {
     const by = USC.BAR_Y;
     const barLen = (x1 - x0) * f.barReveal;
 
-    const name = State.droppedFile?.name ?? "file";
+    const name = State.droppedLabel;
     text(ctx, `Uploading ${name}`, x0, by - 30, `500 12.5px ${FONT}`, "#A9ADB5");
 
     if (f.check > 0) {
@@ -272,9 +280,10 @@ export class UploadCanvas {
     ctx.globalAlpha = f.chooseAlpha;
     ctx.translate(0, (1 - f.chooseAlpha) * 4);
 
-    const name = State.droppedFile?.name ?? "file";
-    text(ctx, `${name} is ready.`, 114, 80, `600 14px ${FONT}`, "#F5F6F8");
-    text(ctx, "What do you want to do with it?", 114, 100, `400 12.5px ${FONT}`, "#9398A1");
+    const many = State.droppedFiles.length > 1;
+    const name = many ? `${State.droppedFiles.length} files` : State.droppedLabel;
+    text(ctx, `${name} ${many ? "are" : "is"} ready.`, 114, 80, `600 14px ${FONT}`, "#F5F6F8");
+    text(ctx, many ? "What do you want to do with them?" : "What do you want to do with it?", 114, 100, `400 12.5px ${FONT}`, "#9398A1");
 
     ctx.fillStyle = "#F5F6F8";
     rr(ctx, 114, 113, 168, 26, 13);

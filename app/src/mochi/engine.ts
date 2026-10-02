@@ -1,4 +1,4 @@
-// Mochi — direct port of NotchBuddy/Sources/App/BotEngine.swift to Canvas 2D.
+// Mochi — direct port of upstream's BotEngine.swift (macOS) to Canvas 2D.
 // Same constants, same tweens, same easings, same particles. The only intentional
 // difference is the `happy`/`wink` eye arc, which follows the prototype
 // (design/prototype/notch-buddy.html, the visual source of truth) — the Swift
@@ -458,7 +458,33 @@ export class BotEngine {
       this.tweens.size > 0 ||
       this.particles.length > 0 ||
       this.cfg.bounces || this.cfg.scans || this.cfg.breathes || this.cfg.zz || this.cfg.sweat ||
+      // The ••• badge (working, thinking, searching) pulses forever; without it
+      // here the loop stopped once Mochi settled and the dots froze.
+      (this.badge?.kind === "dots" && this.badgeS > 0.01) ||
       this.isMini ||
+      Math.abs(this.tgYaw - this.yaw) > 0.002 ||
+      Math.abs(this.tgPitch - this.pitch) > 0.002 ||
+      Math.abs(this.tgTilt - this.tilt) > 0.002 ||
+      Math.abs(this.tgSy - this.sy) > 0.002 ||
+      Math.abs(this.tgSx - this.sx) > 0.002 ||
+      Math.abs(this.tgEs - this.es) > 0.002 ||
+      this.slotH > 0.001 || Math.abs(this.slotHVel) > 0.001 ||
+      Math.abs(this.col[0] - this.colT[0]) > 0.003 ||
+      Math.abs(this.col[1] - this.colT[1]) > 0.003 ||
+      Math.abs(this.col[2] - this.colT[2]) > 0.003
+    );
+  }
+
+  /**
+   * True while something other than the endless idle loops (breathing,
+   * bouncing, z's, sweat) is moving: a tween, particles, the head turning
+   * toward the cursor, a colour fade. The loops alone are slow and read just
+   * as well at a lower frame rate.
+   */
+  get lively(): boolean {
+    return (
+      this.tweens.size > 0 ||
+      this.particles.length > 0 ||
       Math.abs(this.tgYaw - this.yaw) > 0.002 ||
       Math.abs(this.tgPitch - this.pitch) > 0.002 ||
       Math.abs(this.tgTilt - this.tilt) > 0.002 ||
@@ -1025,17 +1051,22 @@ export class BotEngine {
         x.arc(0, 0, dotR, 0, Math.PI * 2);
         x.fill();
       } else {
-        const pw = R * 0.72;
-        const ph = R * 0.36;
+        // Same pill as the prototype: a black outline, then the coloured bubble.
+        const pw = R * 0.74;
+        const ph = R * 0.42;
+        const rim = R * 0.07;
+        roundRectPath(x, -pw / 2 - rim, -ph / 2 - rim, pw + rim * 2, ph + rim * 2, ph / 2 + rim);
+        x.fillStyle = "#000";
+        x.fill();
         roundRectPath(x, -pw / 2, -ph / 2, pw, ph, ph / 2);
         x.fillStyle = col;
         x.fill();
         for (let i = 0; i < 3; i++) {
           const phase = (((t * 2.4 - i * 0.22) % 1) + 1) % 1;
-          const dotR = R * 0.055 * (1 + 0.4 * Math.max(0, Math.sin(phase * Math.PI * 2)));
-          x.fillStyle = "#fff";
+          const dotR = R * 0.06 * (1 + 0.4 * Math.max(0, Math.sin(phase * Math.PI * 2)));
+          x.fillStyle = "rgba(255,255,255,0.95)";
           x.beginPath();
-          x.arc((i - 1) * R * 0.18, 0, dotR, 0, Math.PI * 2);
+          x.arc((i - 1) * R * 0.19, 0, dotR, 0, Math.PI * 2);
           x.fill();
         }
       }

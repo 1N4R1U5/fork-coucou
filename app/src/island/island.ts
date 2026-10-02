@@ -2,7 +2,7 @@
 // Mirrors IslandRootView.swift + IslandWindowController.swift.
 
 import { Tracked, Spring, clamp } from "../core/anim";
-import { Bridge, IS_LINUX, IS_TAURI, onDragDrop } from "../core/bridge";
+import { Bridge, IS_LINUX, IS_TAURI, onDragDrop, type DragDropPayload } from "../core/bridge";
 import {
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
   ROUNDED_CORNER, VIEW_LAYOUTS, botGlowColor, botGlowOpacity, botPosition, chatPromptHeight,
@@ -19,6 +19,20 @@ import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
+
+/**
+ * Inline style write that skips unchanged values. The frame loop sets a dozen
+ * styles every frame; even an identical value makes WebKit restyle and repaint
+ * the island, which was most of what an open island cost while sitting still.
+ */
+const lastStyle = new WeakMap<HTMLElement, Map<string, string>>();
+function setStyle(el: HTMLElement, prop: string, value: string) {
+  let m = lastStyle.get(el);
+  if (!m) lastStyle.set(el, (m = new Map()));
+  if (m.get(prop) === value) return;
+  m.set(prop, value);
+  el.style.setProperty(prop.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`), value);
+}
 
 const BOT_OVERHANG = 40;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
@@ -63,6 +77,8 @@ export class Island {
 
   private running = false;
   private lastFrame = 0;
+  /** Pending throttled frame while only the idle loops are animating. */
+  private idleTimer: number | null = null;
   private dirty = true;
   private canvasPx = 0;
 
@@ -188,8 +204,8 @@ export class Island {
     // the header, which stays visible on top of it exactly as on macOS.
     this.uploadCanvas = new UploadCanvas({
       ask: () => {
-        State.promptContext = State.droppedFile
-          ? { kind: "file", name: State.droppedFile.name, path: State.droppedFile.path }
+        State.promptContext = State.droppedFiles.length
+          ? { kind: "files", files: State.droppedFiles }
           : null;
         this.setView("prompt");
       },
@@ -202,6 +218,7 @@ export class Island {
       this.greetingCanvas,
       this.uploadCanvas.el,
       this.contentEl,
+      this.uploadCanvas.overlay,
     );
     this.islandEl = h(
       "div",
@@ -351,19 +368,28 @@ export class Island {
 
   // ── File drop ───────────────────────────────────────────────────────────────
 
-  private onDragDrop(e: { type: string; paths?: string[] }) {
+  private onDragDrop(e: DragDropPayload) {
     if (e.type !== "over") void Bridge.log(`drag ${e.type} ${e.paths?.length ?? 0} file(s)`);
     if (State.paused) return;
+    // The drag carries its own position. On Linux it is the only one there is:
+    // while a Wayland client drags, XWayland stops seeing the pointer, so the
+    // cursor poll goes quiet and Mochi would neither follow nor see the file.
+    if (e.position && e.type !== "leave") {
+      const dpr = window.devicePixelRatio || 1;
+      this.onCursor(e.position.x / dpr, e.position.y / dpr);
+    }
     switch (e.type) {
       case "enter":
       case "over": {
         if (State.fileDragOver) return;
         State.fileDragOver = true;
         this.engine.animateMorph(1);
-        // enterZone must run before the island expands, so the sequence is
-        // already active by the time the view becomes `upload`.
-        UploadSeq.enterZone(State.mouseInIsland.x, State.mouseInIsland.y);
+        // Open first, then start the sequence. From a closed island the state
+        // machine passes through the home view on the way, and leaving the drop
+        // views stops the sequence: started earlier, it died right there and
+        // only the static drop card showed. Both run before the next frame.
         this.alert("upload");
+        UploadSeq.enterZone(State.mouseInIsland.x, State.mouseInIsland.y);
         break;
       }
       case "leave": {
@@ -377,27 +403,27 @@ export class Island {
       }
       case "drop": {
         State.fileDragOver = false;
-        const path = e.paths?.[0];
-        if (!path) {
+        const paths = e.paths ?? [];
+        if (paths.length === 0) {
           this.engine.animateMorph(0);
           this.setView(State.defaultView());
           return;
         }
-        this.swallow(path);
+        this.swallow(paths);
         break;
       }
     }
   }
 
   /**
-   * Mochi eats the file. Nothing here waits on the file system: the copy into
-   * the inbox runs in the background and swaps the path in when it lands, so a
+   * Mochi eats the files. Nothing here waits on the file system: the copies into
+   * the inbox run in the background and swap the paths in when they land, so a
    * slow disk can never stall the animation — same as FileDropHandler on macOS.
    */
-  private swallow(path: string) {
-    const name = path.split(/[\\/]/).pop() || "file";
-    State.droppedFile = { name, path };
-    State.promptContext = { kind: "file", name, path };
+  private swallow(paths: string[]) {
+    const files = paths.map((path) => ({ name: path.split(/[\\/]/).pop() || "file", path }));
+    State.droppedFiles = files;
+    State.promptContext = { kind: "files", files };
     State.chatHistory = [];
     void Bridge.chatReset();
 
@@ -414,20 +440,27 @@ export class Island {
     this.setView("uploading");
     this.ensureRunning();
 
-    void Bridge.ingestFile(path)
-      .then((file) => {
-        State.droppedFile = { name: file.name, path: file.path };
-        State.promptContext = { kind: "file", name: file.name, path: file.path };
+    // A file that can't be taken
+    // (a folder, an unreadable one) is dropped from the batch; only when none
+    // made it does the sequence stop with the error.
+    void Promise.allSettled(paths.map((path) => Bridge.ingestFile(path))).then((results) => {
+      if (State.droppedFiles !== files) return; // a newer drop replaced this one
+      const kept = results.flatMap((r) => (r.status === "fulfilled" ? [{ name: r.value.name, path: r.value.path }] : []));
+      if (kept.length > 0) {
+        State.droppedFiles = kept;
+        State.promptContext = { kind: "files", files: kept };
         State.notify();
-      })
-      .catch((err) => {
-        UploadSeq.deactivate();
-        State.noteMessage = String(err).replace(/^Error:\s*/, "");
-        this.engine.animateMorph(0);
-        this.setView("note");
-        Sound.play("error");
-        window.setTimeout(() => this.setView(State.defaultView()), 2400);
-      });
+        return;
+      }
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      State.droppedFiles = [];
+      UploadSeq.deactivate();
+      State.noteMessage = String(failed?.reason).replace(/^Error:\s*/, "");
+      this.engine.animateMorph(0);
+      this.setView("note");
+      Sound.play("error");
+      window.setTimeout(() => this.setView(State.defaultView()), 2400);
+    });
   }
 
   /**
@@ -483,16 +516,17 @@ export class Island {
     const w = this.width.value;
     const hh = this.height.value;
     const r = this.radius.value;
-    this.islandEl.style.width = `${w}px`;
-    this.islandEl.style.height = `${hh}px`;
-    this.islandEl.style.borderRadius = `0 0 ${r}px ${r}px`;
-    this.islandEl.style.transform = `translateX(-50%)`;
+    setStyle(this.islandEl, "width", `${w}px`);
+    setStyle(this.islandEl, "height", `${hh}px`);
+    setStyle(this.islandEl, "borderRadius", `0 0 ${r}px ${r}px`);
+    setStyle(this.islandEl, "transform", `translateX(-50%)`);
     // These follow the island as it resizes, so they belong here rather than in
     // the state-driven DOM sync.
-    this.miniGrid.style.left = `${w - 40 - 14.5}px`;
-    this.miniGrid.style.top = `${hh / 2 - 14.5}px`;
-    this.greetingCanvas.style.left = `${(w - EXPANDED_W) / 2}px`;
-    this.uploadCanvas.el.style.left = `${(w - EXPANDED_W) / 2}px`;
+    setStyle(this.miniGrid, "left", `${w - 40 - 14.5}px`);
+    setStyle(this.miniGrid, "top", `${hh / 2 - 14.5}px`);
+    setStyle(this.greetingCanvas, "left", `${(w - EXPANDED_W) / 2}px`);
+    setStyle(this.uploadCanvas.el, "left", `${(w - EXPANDED_W) / 2}px`);
+    setStyle(this.uploadCanvas.overlay, "left", `${(w - EXPANDED_W) / 2}px`);
 
     const rect = { x: (PANEL_W - w) / 2, y: 0, w, h: hh };
     const p = this.pushedRect;
@@ -587,7 +621,16 @@ export class Island {
 
   /** Cursor in window-logical coordinates. */
   onCursor(x: number, y: number) {
+    const lookBefore = [this.lookX(), this.lookY()];
     State.mouse = { x, y };
+    // Mochi follows the pointer with its eyes: worth full-rate frames, but only
+    // when that actually changes where it looks (far away, tanh flattens out).
+    if (
+      State.mode !== "hidden" &&
+      (Math.abs(this.lookX() - lookBefore[0]) > 0.01 || Math.abs(this.lookY() - lookBefore[1]) > 0.01)
+    ) {
+      this.ensureRunning();
+    }
     const rect = this.islandRect();
     State.mouseInIsland = { x: x - rect.x, y: y - rect.y };
 
@@ -688,6 +731,13 @@ export class Island {
   // ── Frame loop ──────────────────────────────────────────────────────────────
 
   ensureRunning() {
+    // Waiting out a throttled idle frame: anything new deserves a frame now.
+    if (this.idleTimer != null) {
+      window.clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+      requestAnimationFrame(this.frame);
+      return;
+    }
     if (this.running) return;
     this.running = true;
     this.lastFrame = performance.now();
@@ -695,7 +745,8 @@ export class Island {
   }
 
   private frame = (nowMs: number) => {
-    const dt = Math.min(0.05, (nowMs - this.lastFrame) / 1000);
+    // Throttled idle frames come 33–50 ms apart; let them advance by that much.
+    const dt = Math.min(0.07, (nowMs - this.lastFrame) / 1000);
     this.lastFrame = nowMs;
 
     this.width.step(dt, nowMs);
@@ -729,7 +780,7 @@ export class Island {
 
     const uploadActive = this.uploadActive;
     if (uploadActive) this.uploadCanvas.draw(UploadSeq.frame(), nowMs / 1000);
-    this.uploadCanvas.el.classList.toggle("on", uploadActive);
+    this.uploadCanvas.setActive(uploadActive);
     this.viewsEl.classList.toggle("hidden-by-upload", uploadActive);
 
     tickMiniBots(dt);
@@ -755,7 +806,22 @@ export class Island {
         // with two lines drawn over each other.
         (view?.busy?.() ?? false);
 
-    if (busy) {
+    // Only Mochi's endless idle loops left (breathing, z's…): those are slow and
+    // read just as well at 20–30 fps, which halves to thirds what the island
+    // costs while it sits on screen. Any input or state change brings back full
+    // rate through ensureRunning().
+    const idleOnly = busy && State.mode !== "hidden" && !settling &&
+      this.botCx.settled && this.botCy.settled && this.botSize.settled &&
+      !greetingActive && !UploadSeq.isActive && !(view?.busy?.() ?? false) &&
+      !this.engine.lively && !this.dirty;
+
+    if (idleOnly) {
+      const fps = State.mode === "compact" ? 20 : 30;
+      this.idleTimer = window.setTimeout(() => {
+        this.idleTimer = null;
+        requestAnimationFrame(this.frame);
+      }, 1000 / fps);
+    } else if (busy) {
       requestAnimationFrame(this.frame);
     } else {
       this.running = false;
@@ -772,20 +838,20 @@ export class Island {
     const greetingActive = State.mode === "expanded" && State.view === "greeting";
     // The drop canvas draws its own Mochi; two of them would overlap.
     const visible = p.opacity > 0 && !greetingActive && !this.uploadActive;
-    this.botCanvas.style.opacity = visible ? "1" : "0";
+    setStyle(this.botCanvas, "opacity", visible ? "1" : "0");
 
     if (State.mode === "expanded" && State.view !== "uploading" && !greetingActive && !this.uploadActive) {
       const d = p.diameter;
       const color = botGlowColor(State.effectiveState);
-      this.botGlow.style.display = "block";
-      this.botGlow.style.width = `${d * 2.2}px`;
-      this.botGlow.style.height = `${d * 2.2}px`;
-      this.botGlow.style.left = `${this.botCx.value - d * 1.1}px`;
-      this.botGlow.style.top = `${this.botCy.value - d * 1.1}px`;
-      this.botGlow.style.background = `radial-gradient(circle, ${color} 0%, transparent 62%)`;
-      this.botGlow.style.opacity = String(botGlowOpacity(State.effectiveState));
+      setStyle(this.botGlow, "display", "block");
+      setStyle(this.botGlow, "width", `${d * 2.2}px`);
+      setStyle(this.botGlow, "height", `${d * 2.2}px`);
+      setStyle(this.botGlow, "left", `${this.botCx.value - d * 1.1}px`);
+      setStyle(this.botGlow, "top", `${this.botCy.value - d * 1.1}px`);
+      setStyle(this.botGlow, "background", `radial-gradient(circle, ${color} 0%, transparent 62%)`);
+      setStyle(this.botGlow, "opacity", String(botGlowOpacity(State.effectiveState)));
     } else {
-      this.botGlow.style.display = "none";
+      setStyle(this.botGlow, "display", "none");
     }
   }
 
@@ -798,11 +864,11 @@ export class Island {
       this.canvasPx = w;
       this.botCanvas.width = Math.round(w * dpr);
       this.botCanvas.height = Math.round(hCss * dpr);
-      this.botCanvas.style.width = `${w}px`;
-      this.botCanvas.style.height = `${hCss}px`;
+      setStyle(this.botCanvas, "width", `${w}px`);
+      setStyle(this.botCanvas, "height", `${hCss}px`);
     }
-    this.botCanvas.style.left = `${this.botCx.value - w / 2}px`;
-    this.botCanvas.style.top = `${this.botCy.value - BOT_OVERHANG / 2 - hCss / 2}px`;
+    setStyle(this.botCanvas, "left", `${this.botCx.value - w / 2}px`);
+    setStyle(this.botCanvas, "top", `${this.botCy.value - BOT_OVERHANG / 2 - hCss / 2}px`);
 
     const ctx = this.botCanvas.getContext("2d");
     if (!ctx) return;
@@ -840,14 +906,17 @@ export class Island {
 
   private updateCountdown(nowMs: number) {
     if (State.mode !== "expanded" || State.isPinned || this.homeCollapseAt == null) {
-      this.countdown.style.width = "0px";
+      setStyle(this.countdown, "width", "0px");
       return;
     }
     const autoClose = State.settings.autoCloseInterval;
     const windowS = Math.min(10, autoClose * 0.6);
     const remaining = (this.homeCollapseAt - nowMs) / 1000;
-    this.countdown.style.width =
-      remaining < windowS ? `${Math.max(0, clamp(remaining / windowS, 0, 1) * 160)}px` : "0px";
+    setStyle(
+      this.countdown,
+      "width",
+      remaining < windowS ? `${Math.max(0, clamp(remaining / windowS, 0, 1) * 160)}px` : "0px",
+    );
   }
 
   // ── DOM sync ────────────────────────────────────────────────────────────────
@@ -856,9 +925,9 @@ export class Island {
     const expanded = State.mode === "expanded";
     const greetingActive = expanded && State.view === "greeting";
 
-    this.contentEl.style.opacity = expanded && !greetingActive ? "1" : "0";
-    this.contentEl.style.pointerEvents = expanded && !greetingActive ? "auto" : "none";
-    this.greetingCanvas.style.display = greetingActive ? "block" : "none";
+    setStyle(this.contentEl, "opacity", expanded && !greetingActive ? "1" : "0");
+    setStyle(this.contentEl, "pointerEvents", expanded && !greetingActive ? "auto" : "none");
+    setStyle(this.greetingCanvas, "display", greetingActive ? "block" : "none");
 
     this.header.sync();
     for (const [name, view] of this.views) {
@@ -882,7 +951,7 @@ export class Island {
 
     // Compact mini grid
     const showGrid = State.mode === "compact";
-    this.miniGrid.style.opacity = showGrid ? "1" : "0";
+    setStyle(this.miniGrid, "opacity", showGrid ? "1" : "0");
     if (showGrid) {
       const others = State.otherTasks.slice(0, 4);
       const key = others.map((t) => t.id).join("|");
