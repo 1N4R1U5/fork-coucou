@@ -1,19 +1,9 @@
-# Build artefacts
-NotchBuddy/build/
-NotchBuddy/NotchBuddy.xcodeproj/project.xcworkspace/xcuserdata/
-NotchBuddy/NotchBuddy.xcodeproj/xcuserdata/
-*.xcuserstate
+# Build artefacts live in app/.gitignore (node_modules, dist, target).
 
-# Xcode DerivedData (outside repo — listed for clarity)
-DerivedData/
-
-# macOS
+# Editors and OS
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# iCloud stubs
-*.icloud
+.idea/
+.vscode/
 
 # Local only (never published)
 .claude/

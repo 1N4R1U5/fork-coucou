@@ -1,5 +1,5 @@
 {
-  "name": "coucou-windows",
+  "name": "coucou-linux",
   "private": true,
   "version": "0.1.1",
   "type": "module",
@@ -10,8 +10,7 @@
     "icons": "node scripts/gen-icons.mjs",
     "tauri": "tauri",
     "predev": "cargo build --release -p coucou-hook",
-    "prebuild": "cargo build --release -p coucou-hook",
-    "pack": "tauri build && node scripts/pack.mjs"
+    "prebuild": "cargo build --release -p coucou-hook"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

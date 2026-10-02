@@ -10,8 +10,6 @@ labels: bug
 
 **How to reproduce**
 
-**macOS version**
-
-**Mac model**
+**Distribution and desktop** (e.g. Fedora 41, KDE Plasma 6, Wayland)
 
 **Coucou version**

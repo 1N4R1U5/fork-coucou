@@ -41,7 +41,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb"],
+    "targets": ["appimage", "deb"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -55,13 +55,6 @@
     "longDescription": "Coucou puts Mochi at the top of your screen: it shows your Claude Code sessions and a few integrations, and lets you approve, answer, chat and drop files without leaving what you are doing.",
     "linux": {
       "appimage": { "bundleMediaFramework": true }
-    },
-    "windows": {
-      "nsis": {
-        "installMode": "currentUser",
-        "languages": ["English", "French"],
-        "installerHooks": "nsis/hooks.nsh"
-      }
     }
   }
 }

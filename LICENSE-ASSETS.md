@@ -6,8 +6,8 @@ The [MIT License](LICENSE) covers the **source code** of Coucou. It does **not**
 
 - the names **“Coucou”** and **“Mochi”**;
 - the **Mochi character** — its design, look, expressions and animations as a character;
-- the **app icon** and **menu bar icon** (`NotchBuddy/Assets.xcassets/`);
-- the **sounds** (`NotchBuddy/Resources/sounds/`);
+- the **app icon** and **tray icon** (`app/src-tauri/icons/`, `docs/media/icon.png`);
+- the **sounds** (`app/sounds/`);
 - the **images, GIFs and videos** in `docs/media/` and `design/`.
 
 ## What you can do
